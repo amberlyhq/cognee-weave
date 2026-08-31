@@ -54,6 +54,7 @@ from cognee.api.v1.activity.routers import get_activity_router
 from cognee.api.v1.sessions import get_sessions_router
 from cognee.api.v1.slack.routers import get_slack_channels_router, get_slack_router
 from cognee.api.v1.integrations.routers import get_integrations_router
+from cognee.api.v1.weave.routers import get_weave_router
 from cognee.modules.users.methods.get_authenticated_user import REQUIRE_AUTHENTICATION
 
 # Ensure application logging is configured for container stdout/stderr
@@ -328,6 +329,7 @@ app.include_router(get_forget_router(), prefix="/api/v1/forget", tags=["forget"]
 app.include_router(get_slack_router(), prefix="/api/v1/slack", tags=["slack"])
 app.include_router(get_slack_channels_router(), prefix="/api/v1/slack", tags=["slack"])
 app.include_router(get_integrations_router(), prefix="/api/v1/integrations", tags=["integrations"])
+app.include_router(get_weave_router(), prefix="/api/v1/weave", tags=["weave-internal"])
 
 
 @app.get("/")
