@@ -170,10 +170,16 @@ async def forget(
             # must never happen for a caller without delete permission (an
             # unauthorized caller used to surface as a UniqueViolation 500 — or,
             # for an unprovisioned dataset, actually created rows).
-            resolved_dataset_id = await _resolve_dataset_id(dataset_ref, user)
-            operation_context.set_dataset(resolved_dataset_id)
+            resolved_dataset = await _resolve_authorized_dataset(dataset_ref, user)
+            operation_context.set_dataset(resolved_dataset.id)
 
-            async with set_database_global_context_variables(resolved_dataset_id, user.id):
+            # Enter the context as the dataset owner, not the caller: the
+            # dataset_database row and the per-dataset database paths belong to
+            # the owner, and an ACL-granted caller must resolve those same
+            # databases (#4829).
+            async with set_database_global_context_variables(
+                resolved_dataset.id, resolved_dataset.owner_id
+            ):
                 if memory_only:
                     if data_id is not None:
                         return await _forget_data_memory(data_id, dataset_ref, user)
@@ -231,7 +237,7 @@ async def _forget_dataset(dataset_ref: Union[str, UUID], user: Any) -> dict:
     """
     from cognee.api.v1.datasets.datasets import datasets
 
-    dataset_id = await _resolve_dataset_id(dataset_ref, user)
+    dataset_id = (await _resolve_authorized_dataset(dataset_ref, user)).id
 
     await datasets.empty_dataset(dataset_id, user=user)
 
@@ -243,7 +249,7 @@ async def _forget_data_item(data_id: UUID, dataset_ref: Union[str, UUID], user: 
     """Delete a single data item from a dataset."""
     from cognee.api.v1.datasets.datasets import datasets
 
-    dataset_id = await _resolve_dataset_id(dataset_ref, user)
+    dataset_id = (await _resolve_authorized_dataset(dataset_ref, user)).id
 
     await datasets.delete_data(
         dataset_id=dataset_id,
@@ -289,7 +295,7 @@ async def _forget_dataset_memory(dataset_ref: Union[str, UUID], user: Any) -> di
         reset_dataset_pipeline_run_status,
     )
 
-    dataset_id = await _resolve_dataset_id(dataset_ref, user)
+    dataset_id = (await _resolve_authorized_dataset(dataset_ref, user)).id
 
     # Same per-dataset lock as pipeline runs: wait for any in-flight pipeline
     # on this dataset and exclude concurrent deletes.
@@ -386,7 +392,7 @@ async def _forget_data_memory(data_id: UUID, dataset_ref: Union[str, UUID], user
         delete_data_nodes_and_edges,
     )
 
-    dataset_id = await _resolve_dataset_id(dataset_ref, user)
+    dataset_id = (await _resolve_authorized_dataset(dataset_ref, user)).id
 
     # Same per-dataset lock as pipeline runs: wait for any in-flight pipeline
     # on this dataset and exclude concurrent deletes.
@@ -450,17 +456,16 @@ async def _forget_data_memory(data_id: UUID, dataset_ref: Union[str, UUID], user
     }
 
 
-async def _resolve_dataset_id(dataset_ref: Union[str, UUID], user: Any) -> UUID:
-    """Resolve a dataset name or UUID to a UUID, with permission check."""
+async def _resolve_authorized_dataset(dataset_ref: Union[str, UUID], user: Any):
+    """Resolve a dataset name or UUID to the authorized Dataset, with permission check."""
     if isinstance(dataset_ref, UUID):
         from cognee.modules.data.methods.get_authorized_dataset import get_authorized_dataset
 
         dataset = await get_authorized_dataset(user, dataset_ref, "delete")
         if not dataset:
             raise ValueError(f"Dataset {dataset_ref} not found or not accessible.")
-        return dataset.id
+        return dataset
 
     from cognee.modules.data.methods import get_authorized_dataset_by_name
 
-    dataset = await get_authorized_dataset_by_name(dataset_ref, user, "delete")
-    return dataset.id
+    return await get_authorized_dataset_by_name(dataset_ref, user, "delete")

@@ -38,6 +38,7 @@ DATASET_ID = uuid4()
 DATA_ID_A = uuid4()
 DATA_ID_B = uuid4()
 USER = SimpleNamespace(id=uuid4())
+DATASET = SimpleNamespace(id=DATASET_ID, owner_id=uuid4())
 
 
 def _make_data_record(data_id, pipeline_status=None):
@@ -124,8 +125,8 @@ async def test_forget_dataset_memory_clears_graph_and_resets_pipeline(monkeypatc
     mock_invalidate_deleted_data = AsyncMock()
     monkeypatch.setattr(
         forget_module,
-        "_resolve_dataset_id",
-        AsyncMock(return_value=DATASET_ID),
+        "_resolve_authorized_dataset",
+        AsyncMock(return_value=DATASET),
     )
 
     with (
@@ -193,8 +194,8 @@ async def test_forget_dataset_memory_skips_records_without_pipeline_status(monke
 
     monkeypatch.setattr(
         forget_module,
-        "_resolve_dataset_id",
-        AsyncMock(return_value=DATASET_ID),
+        "_resolve_authorized_dataset",
+        AsyncMock(return_value=DATASET),
     )
     mock_reset_status = AsyncMock()
 
@@ -242,8 +243,8 @@ async def test_forget_data_memory_clears_graph_and_resets_pipeline(monkeypatch):
     mock_delete = AsyncMock()
     monkeypatch.setattr(
         forget_module,
-        "_resolve_dataset_id",
-        AsyncMock(return_value=DATASET_ID),
+        "_resolve_authorized_dataset",
+        AsyncMock(return_value=DATASET),
     )
 
     with (
@@ -283,8 +284,8 @@ async def test_forget_data_memory_no_record_found(monkeypatch):
 
     monkeypatch.setattr(
         forget_module,
-        "_resolve_dataset_id",
-        AsyncMock(return_value=DATASET_ID),
+        "_resolve_authorized_dataset",
+        AsyncMock(return_value=DATASET),
     )
 
     with (
@@ -322,7 +323,7 @@ async def test_forget_memory_only_without_dataset_raises(monkeypatch):
         patch.object(serve_state_module, "get_remote_client", return_value=None),
         patch("cognee.low_level.setup", AsyncMock()),
         patch("cognee.modules.users.methods.get_default_user", AsyncMock(return_value=USER)),
-        patch.object(forget_module, "_resolve_dataset_id", AsyncMock(return_value=DATASET_ID)),
+        patch.object(forget_module, "_resolve_authorized_dataset", AsyncMock(return_value=DATASET)),
         patch.object(
             forget_module, "set_database_global_context_variables", return_value=_NoOpAsyncContext()
         ),
@@ -348,7 +349,7 @@ async def test_forget_routes_to_dataset_memory(monkeypatch):
         patch.object(serve_state_module, "get_remote_client", return_value=None),
         patch("cognee.low_level.setup", AsyncMock()),
         patch("cognee.modules.users.methods.get_default_user", AsyncMock(return_value=USER)),
-        patch.object(forget_module, "_resolve_dataset_id", AsyncMock(return_value=DATASET_ID)),
+        patch.object(forget_module, "_resolve_authorized_dataset", AsyncMock(return_value=DATASET)),
         patch.object(
             forget_module, "set_database_global_context_variables", return_value=_NoOpAsyncContext()
         ),
@@ -376,7 +377,7 @@ async def test_forget_routes_to_data_memory(monkeypatch):
         patch.object(serve_state_module, "get_remote_client", return_value=None),
         patch("cognee.low_level.setup", AsyncMock()),
         patch("cognee.modules.users.methods.get_default_user", AsyncMock(return_value=USER)),
-        patch.object(forget_module, "_resolve_dataset_id", AsyncMock(return_value=DATASET_ID)),
+        patch.object(forget_module, "_resolve_authorized_dataset", AsyncMock(return_value=DATASET)),
         patch.object(
             forget_module, "set_database_global_context_variables", return_value=_NoOpAsyncContext()
         ),
@@ -419,7 +420,7 @@ async def test_forget_telemetry_target_labels(monkeypatch):
         patch.object(serve_state_module, "get_remote_client", return_value=None),
         patch("cognee.low_level.setup", AsyncMock()),
         patch("cognee.modules.users.methods.get_default_user", AsyncMock(return_value=USER)),
-        patch.object(forget_module, "_resolve_dataset_id", AsyncMock(return_value=DATASET_ID)),
+        patch.object(forget_module, "_resolve_authorized_dataset", AsyncMock(return_value=DATASET)),
         patch.object(
             forget_module, "set_database_global_context_variables", return_value=_NoOpAsyncContext()
         ),

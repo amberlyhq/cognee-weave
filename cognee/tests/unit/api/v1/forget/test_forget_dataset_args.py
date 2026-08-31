@@ -20,7 +20,7 @@ class _CapturingContextManager:
     captured = []
 
     def __init__(self, dataset, user_id):
-        type(self).captured.append(dataset)
+        type(self).captured.append((dataset, user_id))
         self.dataset = dataset
         self.user_id = user_id
 
@@ -40,12 +40,16 @@ def _reset_captures():
 @pytest.mark.asyncio
 async def test_forget_routes_dataset_id_without_name_inference():
     dataset_id = uuid4()
+    owner_id = uuid4()
+    resolved_dataset = SimpleNamespace(id=dataset_id, owner_id=owner_id)
     forget_dataset = AsyncMock(return_value={"status": "success", "dataset_id": str(dataset_id)})
 
     with (
         patch.object(low_level_module, "setup", AsyncMock()),
         patch.object(serve_state_module, "get_remote_client", return_value=None),
-        patch.object(forget_module, "_resolve_dataset_id", AsyncMock(return_value=dataset_id)),
+        patch.object(
+            forget_module, "_resolve_authorized_dataset", AsyncMock(return_value=resolved_dataset)
+        ),
         patch.object(
             forget_module,
             "set_database_global_context_variables",
@@ -55,7 +59,8 @@ async def test_forget_routes_dataset_id_without_name_inference():
     ):
         await forget_module.forget(dataset_id=dataset_id, user=USER)
 
-    assert _CapturingContextManager.captured == [dataset_id]
+    # The context is entered as the dataset owner, not the caller (#4829).
+    assert _CapturingContextManager.captured == [(dataset_id, owner_id)]
     forget_dataset.assert_awaited_once()
     assert forget_dataset.call_args.args[0] == dataset_id
 
@@ -63,12 +68,16 @@ async def test_forget_routes_dataset_id_without_name_inference():
 @pytest.mark.asyncio
 async def test_forget_routes_dataset_as_name():
     resolved_id = uuid4()
+    owner_id = uuid4()
+    resolved_dataset = SimpleNamespace(id=resolved_id, owner_id=owner_id)
     forget_dataset = AsyncMock(return_value={"status": "success", "dataset_id": str(resolved_id)})
 
     with (
         patch.object(low_level_module, "setup", AsyncMock()),
         patch.object(serve_state_module, "get_remote_client", return_value=None),
-        patch.object(forget_module, "_resolve_dataset_id", AsyncMock(return_value=resolved_id)),
+        patch.object(
+            forget_module, "_resolve_authorized_dataset", AsyncMock(return_value=resolved_dataset)
+        ),
         patch.object(
             forget_module,
             "set_database_global_context_variables",
@@ -78,8 +87,9 @@ async def test_forget_routes_dataset_as_name():
     ):
         await forget_module.forget(dataset="scientists", user=USER)
 
-    # The context is entered with the *authorized* dataset id, not the raw name.
-    assert _CapturingContextManager.captured == [resolved_id]
+    # The context is entered with the *authorized* dataset id, not the raw name,
+    # and as the dataset owner, not the caller (#4829).
+    assert _CapturingContextManager.captured == [(resolved_id, owner_id)]
     forget_dataset.assert_awaited_once()
     assert forget_dataset.call_args.args[0] == "scientists"
 
