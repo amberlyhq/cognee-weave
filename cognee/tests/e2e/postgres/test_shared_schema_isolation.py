@@ -100,6 +100,22 @@ async def _tables_in_schema(schema: str) -> list:
         await engine.dispose()
 
 
+async def _indexes_in_schema(schema: str, table: str) -> list[tuple[str, str]]:
+    engine = create_async_engine(_base_url())
+    try:
+        async with engine.connect() as conn:
+            result = await conn.execute(
+                text(
+                    "SELECT indexname, indexdef FROM pg_indexes "
+                    "WHERE schemaname = :schema AND tablename = :table"
+                ),
+                {"schema": schema, "table": table},
+            )
+            return [(row[0], row[1]) for row in result.fetchall()]
+    finally:
+        await engine.dispose()
+
+
 @pytest_asyncio.fixture
 async def two_schemas():
     """Yield two fresh dataset schema names and drop them on teardown."""
@@ -134,6 +150,7 @@ def test_dataset_schema_name_rejects_caller_selected_identifier():
 
 
 @pytest.mark.asyncio
+@pytest.mark.filterwarnings("error:This declarative base already contains a class")
 async def test_pgvector_schema_isolation(two_schemas):
     """Two PGVector adapters pinned to different schemas don't see each other."""
     from cognee.infrastructure.databases.vector.pgvector.PGVectorAdapter import (
@@ -158,11 +175,55 @@ async def test_pgvector_schema_isolation(two_schemas):
     a1 = PGVectorAdapter(_base_url(), "", emb, schema=s1)
     a2 = PGVectorAdapter(_base_url(), "", emb, schema=s2)
     try:
+        alice_id = uuid.uuid4()
         await a1.create_data_points(
             "Entity_name",
-            [IndexSchema(id=uuid.uuid4(), text="alice"), IndexSchema(id=uuid.uuid4(), text="bob")],
+            [IndexSchema(id=alice_id, text="alice"), IndexSchema(id=uuid.uuid4(), text="bob")],
         )
         await a2.create_data_points("Entity_name", [IndexSchema(id=uuid.uuid4(), text="carol")])
+
+        indexes = await _indexes_in_schema(s1, "Entity_name")
+        hnsw_indexes = [definition for _, definition in indexes if "USING hnsw" in definition]
+        assert len(hnsw_indexes) == 1
+        assert "vector_cosine_ops" in hnsw_indexes[0]
+
+        query_vector = (await emb.embed_text(["alice"]))[0]
+        async with a1.engine.connect() as conn:
+            await conn.execute(text("SET enable_seqscan = off"))
+            result = await conn.execute(
+                text(
+                    'EXPLAIN SELECT id FROM "Entity_name" '
+                    "ORDER BY vector <=> CAST(:query_vector AS vector) LIMIT 1"
+                ),
+                {"query_vector": str(query_vector)},
+            )
+            query_plan = "\n".join(row[0] for row in result.fetchall())
+        assert "Index Scan" in query_plan
+        assert "hnsw" in query_plan
+
+        await a1.create_data_points(
+            "Entity_name", [IndexSchema(id=alice_id, text="alice updated")]
+        )
+        expected_vector = (await emb.embed_text(["alice updated"]))[0]
+        async with a1.engine.connect() as conn:
+            vector_matches = await conn.scalar(
+                text(
+                    'SELECT vector = CAST(:expected AS vector) FROM "Entity_name" WHERE id = :id'
+                ),
+                {"expected": str(expected_vector), "id": alice_id},
+            )
+        assert vector_matches
+
+        index_name = next(name for name, definition in indexes if "USING hnsw" in definition)
+        async with a1.engine.begin() as conn:
+            await conn.execute(text(f'DROP INDEX "{s1}"."{index_name}"'))
+        repair_adapter = PGVectorAdapter(_base_url(), "", emb, schema=s1)
+        try:
+            await repair_adapter.create_collection("Entity_name")
+        finally:
+            await repair_adapter.close()
+        repaired_indexes = await _indexes_in_schema(s1, "Entity_name")
+        assert sum("USING hnsw" in definition for _, definition in repaired_indexes) == 1
 
         # Same logical collection name lives independently in each schema.
         assert "Entity_name" in await _tables_in_schema(s1)
