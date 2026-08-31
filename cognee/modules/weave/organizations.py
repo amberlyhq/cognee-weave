@@ -235,3 +235,7 @@ _provisioner = OrganizationProvisioner(CogneeOrganizationProvisioningBackend())
 
 async def provision_organization(organization_id: UUID) -> OrganizationBinding:
     return await _provisioner.provision(organization_id)
+
+
+async def get_organization_binding(organization_id: UUID) -> Optional[OrganizationBinding]:
+    return await _provisioner.backend.get(organization_id)

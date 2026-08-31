@@ -2,8 +2,9 @@ import asyncio
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy import JSON, Column, Table, Uuid, select, delete, MetaData, func, text
+from sqlalchemy import JSON, Column, Table, Uuid, select, delete, MetaData, func, text, inspect
 from sqlalchemy import exc
+from sqlalchemy.schema import CreateTable
 from sqlalchemy.exc import DBAPIError, ProgrammingError
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 from asyncpg import DeadlockDetectedError, DuplicateTableError, UniqueViolationError
@@ -267,8 +268,17 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
 
             - bool: Returns True if the collection exists, False otherwise.
         """
-        if collection_name in self._metadata.tables:
+        metadata_key = f"{self.schema}.{collection_name}" if self.schema else collection_name
+        if metadata_key in self._metadata.tables:
             return True
+
+        if self.schema:
+            async with self.engine.begin() as connection:
+                return await connection.run_sync(
+                    lambda sync_connection: inspect(sync_connection).has_table(
+                        collection_name, schema=self.schema
+                    )
+                )
 
         try:
             async with self.engine.begin() as connection:
@@ -302,12 +312,29 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
                     )
 
                     async with self.engine.begin() as connection:
-                        await connection.run_sync(collection_table.create, checkfirst=True)
+                        # ``checkfirst`` can see a same-named table later in
+                        # search_path (usually public) and incorrectly skip a
+                        # tenant schema. The identifier here is explicitly
+                        # schema-qualified; IF NOT EXISTS handles concurrent
+                        # creators without consulting search_path.
+                        await connection.execute(CreateTable(collection_table, if_not_exists=True))
                     # Reflect AFTER the DDL transaction commits so
                     # _metadata is never populated for a table that
                     # might be rolled back.
                     async with self.engine.begin() as connection:
-                        await connection.run_sync(self._metadata.reflect, only=[collection_name])
+                        if self.schema:
+                            await connection.run_sync(
+                                lambda sync_connection: Table(
+                                    collection_name,
+                                    self._metadata,
+                                    schema=self.schema,
+                                    autoload_with=sync_connection,
+                                )
+                            )
+                        else:
+                            await connection.run_sync(
+                                self._metadata.reflect, only=[collection_name]
+                            )
 
         if collection_name not in self._hnsw_indexed_collections:
             async with self.VECTOR_DB_LOCK:
@@ -361,9 +388,7 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
                     "vector": data_vectors[data_index],
                     # Strip NUL bytes: the json column accepts \u0000 on insert, but
                     # the payload::jsonb casts in search/merge queries reject it.
-                    "payload": sanitize_relational_payload(
-                        serialize_data(data_point.model_dump())
-                    ),
+                    "payload": sanitize_relational_payload(serialize_data(data_point.model_dump())),
                 }
             )
 
@@ -455,19 +480,30 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
         Dynamically loads a table using the given collection name
         with an async engine.
         """
-        if collection_name in self._metadata.tables:
-            return self._metadata.tables[collection_name]
+        metadata_key = f"{self.schema}.{collection_name}" if self.schema else collection_name
+        if metadata_key in self._metadata.tables:
+            return self._metadata.tables[metadata_key]
 
         try:
             async with self.engine.begin() as connection:
-                await connection.run_sync(self._metadata.reflect, only=[collection_name])
+                if self.schema:
+                    await connection.run_sync(
+                        lambda sync_connection: Table(
+                            collection_name,
+                            self._metadata,
+                            schema=self.schema,
+                            autoload_with=sync_connection,
+                        )
+                    )
+                else:
+                    await connection.run_sync(self._metadata.reflect, only=[collection_name])
         except exc.InvalidRequestError:
             raise CollectionNotFoundError(
                 f"Collection '{collection_name}' not found!",
             )
 
-        if collection_name in self._metadata.tables:
-            return self._metadata.tables[collection_name]
+        if metadata_key in self._metadata.tables:
+            return self._metadata.tables[metadata_key]
 
         raise CollectionNotFoundError(
             f"Collection '{collection_name}' not found!",

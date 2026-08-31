@@ -110,6 +110,7 @@ class WeaveIndexJob(Base):
     extraction_version = Column(String(64), nullable=False)
     status = Column(String(32), nullable=False, default="queued")
     error_code = Column(String(128), nullable=True)
+    attempt_count = Column(BigInteger, nullable=False, default=1)
     created_at = Column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
     completed_at = Column(DateTime(timezone=True), nullable=True)
