@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from cognee.modules.weave.auth import require_internal_bearer
+from cognee.modules.weave.contracts import RecallRequest, RecallResponse
 from cognee.modules.weave.organizations import provision_organization
 
 
@@ -69,5 +70,17 @@ def get_weave_router() -> APIRouter:
         except LookupError as error:
             raise HTTPException(status_code=404, detail="Organization not found") from error
         return IndexRepositoryResponse(job_id=job.id, status="accepted")
+
+    @router.post(
+        "/organizations/{organization_id}/recall",
+        response_model=RecallResponse,
+    )
+    async def recall_candidates(
+        organization_id: UUID,
+        request: RecallRequest,
+    ) -> RecallResponse:
+        from cognee.modules.weave.recall import recall
+
+        return await recall(organization_id, request)
 
     return router
