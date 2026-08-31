@@ -87,3 +87,31 @@ class RecallResponse(BaseModel):
     graph_candidates: list[RecallCandidate] = Field(default_factory=list, max_length=25)
     vector_candidates: list[RecallCandidate] = Field(default_factory=list, max_length=25)
     diagnostics: list[RecallDiagnostic] = Field(default_factory=list, max_length=5)
+
+
+class SurfaceEdge(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_fact_identity: str
+    target_fact_identity: str
+    relation_type: str
+
+
+class SurfaceResponse(BaseModel):
+    """Bounded export/visualization data from one resolved organization scope."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    surface: Literal["export", "visualization"]
+    repositories: list[RepositoryReference] = Field(default_factory=list, max_length=20)
+    nodes: list[RecallCandidate] = Field(default_factory=list, max_length=500)
+    edges: list[SurfaceEdge] = Field(default_factory=list, max_length=1000)
+
+
+class DeleteResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+    github_repository_id: Optional[int] = None
+    status: Literal["deleted"] = "deleted"

@@ -57,6 +57,17 @@ def test_evict_for_database_rejects_empty_name():
         ops.evict_for_database("")
 
 
+def test_evict_matching_routes_scoped_criteria_and_rejects_empty_match():
+    ops, factory, _ = make_ops()
+    factory.cache_evict_matching.return_value = 2
+
+    assert ops.evict_matching(graph_database_schema="ds_tenant") == 2
+    factory.cache_evict_matching.assert_called_once_with(graph_database_schema="ds_tenant")
+
+    with pytest.raises(ValueError, match="at least one criterion"):
+        ops.evict_matching()
+
+
 @pytest.mark.asyncio
 async def test_aevict_for_database_awaits_in_flight_closes():
     ops, factory, _ = make_ops()

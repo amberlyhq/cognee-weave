@@ -1,10 +1,15 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
 from cognee.modules.weave.auth import require_internal_bearer
-from cognee.modules.weave.contracts import RecallRequest, RecallResponse
+from cognee.modules.weave.contracts import (
+    DeleteResponse,
+    RecallRequest,
+    RecallResponse,
+    SurfaceResponse,
+)
 from cognee.modules.weave.organizations import provision_organization
 
 
@@ -82,5 +87,62 @@ def get_weave_router() -> APIRouter:
         from cognee.modules.weave.recall import recall
 
         return await recall(organization_id, request)
+
+    @router.get(
+        "/organizations/{organization_id}/export",
+        response_model=SurfaceResponse,
+    )
+    async def export_candidates(
+        organization_id: UUID,
+        repository_id: list[int] = Query(default=[], max_length=20),
+    ) -> SurfaceResponse:
+        from cognee.modules.weave.deletion import SurfaceNotFound, export_organization
+
+        try:
+            return await export_organization(organization_id, repository_id)
+        except SurfaceNotFound as error:
+            raise HTTPException(status_code=404, detail="Resource not found") from error
+
+    @router.get(
+        "/organizations/{organization_id}/visualization",
+        response_model=SurfaceResponse,
+    )
+    async def visualization(
+        organization_id: UUID,
+        repository_id: list[int] = Query(default=[], max_length=20),
+    ) -> SurfaceResponse:
+        from cognee.modules.weave.deletion import SurfaceNotFound, visualize_organization
+
+        try:
+            return await visualize_organization(organization_id, repository_id)
+        except SurfaceNotFound as error:
+            raise HTTPException(status_code=404, detail="Resource not found") from error
+
+    @router.delete(
+        "/organizations/{organization_id}/repositories/{github_repository_id}",
+        response_model=DeleteResponse,
+    )
+    async def remove_repository(
+        organization_id: UUID,
+        github_repository_id: int,
+    ) -> DeleteResponse:
+        from cognee.modules.weave.deletion import SurfaceNotFound, delete_repository
+
+        try:
+            return await delete_repository(organization_id, github_repository_id)
+        except SurfaceNotFound as error:
+            raise HTTPException(status_code=404, detail="Resource not found") from error
+
+    @router.delete(
+        "/organizations/{organization_id}",
+        response_model=DeleteResponse,
+    )
+    async def remove_organization(organization_id: UUID) -> DeleteResponse:
+        from cognee.modules.weave.deletion import SurfaceNotFound, delete_organization
+
+        try:
+            return await delete_organization(organization_id)
+        except SurfaceNotFound as error:
+            raise HTTPException(status_code=404, detail="Resource not found") from error
 
     return router

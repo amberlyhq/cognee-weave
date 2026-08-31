@@ -88,3 +88,54 @@ def test_openapi_request_models_do_not_expose_storage_selectors(monkeypatch):
         "cypher",
     ):
         assert forbidden not in rendered
+
+
+def test_all_weave_surfaces_require_internal_auth(monkeypatch):
+    from cognee.api.v1.weave.routers.get_weave_router import get_weave_router
+
+    monkeypatch.setenv("WEAVE_INTERNAL_TOKEN", "secret")
+    app = FastAPI()
+    app.include_router(get_weave_router(), prefix="/api/v1/weave")
+    client = TestClient(app)
+    organization_id = uuid4()
+    repository_id = 1234
+
+    requests = (
+        ("get", f"/api/v1/weave/organizations/{organization_id}/export"),
+        ("get", f"/api/v1/weave/organizations/{organization_id}/visualization"),
+        (
+            "delete",
+            f"/api/v1/weave/organizations/{organization_id}/repositories/{repository_id}",
+        ),
+        ("delete", f"/api/v1/weave/organizations/{organization_id}"),
+    )
+    for method, path in requests:
+        assert client.request(method, path).status_code == 401
+
+
+def test_foreign_and_absent_surface_targets_have_the_same_response(monkeypatch):
+    from cognee.api.v1.weave.routers.get_weave_router import get_weave_router
+    from cognee.modules.weave import deletion
+
+    async def not_found(*_args, **_kwargs):
+        raise deletion.SurfaceNotFound()
+
+    monkeypatch.setattr(deletion, "export_organization", not_found)
+    monkeypatch.setenv("WEAVE_INTERNAL_TOKEN", "secret")
+    app = FastAPI()
+    app.include_router(get_weave_router(), prefix="/api/v1/weave")
+    client = TestClient(app)
+    organization_id = uuid4()
+    headers = {"Authorization": "Bearer secret"}
+
+    foreign = client.get(
+        f"/api/v1/weave/organizations/{organization_id}/export?repository_id=940003",
+        headers=headers,
+    )
+    absent = client.get(
+        f"/api/v1/weave/organizations/{organization_id}/export?repository_id=949999",
+        headers=headers,
+    )
+
+    assert foreign.status_code == absent.status_code == 404
+    assert foreign.json() == absent.json() == {"detail": "Resource not found"}

@@ -97,18 +97,7 @@ class PGVectorSharedDatasetDatabaseHandler(DatasetDatabaseHandlerInterface):
 
         # Drop the cached adapter pinned to this schema (its reflection cache
         # would otherwise outlive the schema) before removing the schema itself.
-        vector_engine_cache.evict(
-            vector_db_provider=dataset_database.vector_database_provider,
-            vector_db_url=dataset_database.vector_database_url,
-            vector_db_name=dataset_database.vector_database_name,
-            vector_db_port=info["port"],
-            vector_db_key=dataset_database.vector_database_key,
-            vector_dataset_database_handler=dataset_database.vector_dataset_database_handler,
-            vector_db_username=info["username"],
-            vector_db_password=info["password"],
-            vector_db_host=info["host"],
-            vector_db_schema=schema,
-        )
+        vector_engine_cache.evict_matching(vector_db_schema=schema)
 
         await drop_pg_schema_if_exists(
             dataset_database.vector_database_name,

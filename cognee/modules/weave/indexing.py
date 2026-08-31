@@ -279,15 +279,25 @@ class PostgresIndexStateStore:
                 )
             )
             if job is not None:
-                if job.status == "failed":
+                if snapshot is None:
+                    raise RuntimeError("Index job exists without repository snapshot")
+                restore_deleted = snapshot.deleted_at is not None
+                if job.status == "failed" or restore_deleted:
                     job.status = "queued"
                     job.error_code = None
                     job.indexed_sha = None
                     job.completed_at = None
                     job.attempt_count += 1
+                    snapshot.repository_owner = request.repository_owner
+                    snapshot.repository_name = request.repository_name
+                    snapshot.default_branch = request.default_branch
+                    snapshot.requested_sha = request.requested_sha
+                    snapshot.pipeline_version = request.pipeline_version
+                    snapshot.extraction_version = request.extraction_version
+                    snapshot.status = "queued"
+                    snapshot.error_code = None
+                    snapshot.deleted_at = None
                     await session.commit()
-                if snapshot is None:
-                    raise RuntimeError("Index job exists without repository snapshot")
                 return _job_state(job, snapshot)
 
             if snapshot is None:
@@ -307,6 +317,7 @@ class PostgresIndexStateStore:
             snapshot.extraction_version = request.extraction_version
             snapshot.status = "queued"
             snapshot.error_code = None
+            snapshot.deleted_at = None
 
             job = WeaveIndexJob(
                 organization_id=request.organization_id,

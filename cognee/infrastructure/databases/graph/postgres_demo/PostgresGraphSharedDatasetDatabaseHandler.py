@@ -112,17 +112,7 @@ class PostgresGraphSharedDatasetDatabaseHandler:
         schema = info["graph_database_schema"]
         db_name = dataset_database.graph_database_name
 
-        graph_engine_cache.evict(
-            graph_database_provider="postgres",
-            graph_file_path="",
-            graph_database_name=db_name,
-            graph_database_username=username,
-            graph_database_password=password,
-            graph_database_host=host,
-            graph_database_port=port,
-            graph_dataset_database_handler=dataset_database.graph_dataset_database_handler,
-            graph_database_schema=schema,
-        )
+        graph_engine_cache.evict_matching(graph_database_schema=schema)
 
         await drop_pg_schema_if_exists(
             db_name,
