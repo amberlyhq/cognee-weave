@@ -8,7 +8,9 @@ decorated factory.
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+from cognee.infrastructure.databases.graph.get_graph_engine import _graph_engine_key_args
 from cognee.infrastructure.databases.utils.engine_cache_ops import EngineCacheOps
+from cognee.infrastructure.databases.vector.create_vector_engine import _vector_engine_key_args
 
 
 def make_ops(**kwargs):
@@ -90,3 +92,29 @@ async def test_aevict_for_url_awaits_in_flight_closes():
     assert await ops.aevict_for_url("bolt://localhost:7799") == 2
     factory.cache_evict_matching.assert_called_once_with(db_url_field="bolt://localhost:7799")
     factory.cache_await_closed.assert_awaited_once_with(db_url_field="bolt://localhost:7799")
+
+
+def test_graph_engine_cache_key_includes_dataset_schema():
+    first = _graph_engine_key_args(
+        {"graph_database_provider": "postgres_demo", "graph_database_schema": "ds_first"}
+    )
+    second = _graph_engine_key_args(
+        {"graph_database_provider": "postgres_demo", "graph_database_schema": "ds_second"}
+    )
+
+    assert first != second
+    assert first[-1] == "ds_first"
+    assert second[-1] == "ds_second"
+
+
+def test_vector_engine_cache_key_includes_dataset_schema():
+    first = _vector_engine_key_args(
+        {"vector_db_provider": "pgvector", "vector_db_schema": "ds_first"}
+    )
+    second = _vector_engine_key_args(
+        {"vector_db_provider": "pgvector", "vector_db_schema": "ds_second"}
+    )
+
+    assert first != second
+    assert first[-1] == "ds_first"
+    assert second[-1] == "ds_second"

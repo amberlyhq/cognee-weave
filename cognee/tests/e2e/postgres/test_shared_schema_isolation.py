@@ -100,15 +100,6 @@ async def _tables_in_schema(schema: str) -> list:
         await engine.dispose()
 
 
-@pytest.fixture(scope="session")
-def event_loop():
-    import asyncio
-
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
-
-
 @pytest_asyncio.fixture
 async def two_schemas():
     """Yield two fresh dataset schema names and drop them on teardown."""
@@ -135,6 +126,11 @@ def test_dataset_schema_name_is_valid_identifier():
     assert name == f"ds_{dataset_id.hex}"
     assert name.isidentifier()
     assert len(name) <= 63  # Postgres identifier limit
+
+
+def test_dataset_schema_name_rejects_caller_selected_identifier():
+    with pytest.raises(ValueError, match="dataset UUID"):
+        dataset_schema_name("public")
 
 
 @pytest.mark.asyncio

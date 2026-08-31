@@ -54,7 +54,7 @@ def _compile_drop_database_if_exists(element: DropDatabaseIfExists, compiler, **
     return "DROP DATABASE IF EXISTS " + compiler.preparer.quote(element.db_name)
 
 
-def dataset_schema_name(dataset_id: Union[UUID, str]) -> str:
+def dataset_schema_name(dataset_id: UUID) -> str:
     """Postgres schema name used to isolate a dataset in shared-database mode.
 
     Returns ``ds_<dataset_id_hex>`` — a valid, lower-case Postgres identifier
@@ -63,8 +63,10 @@ def dataset_schema_name(dataset_id: Union[UUID, str]) -> str:
     starts with a digit, and namespaces these schemas so they never collide
     with ``public`` or cognee's relational tables.
     """
-    raw = dataset_id.hex if isinstance(dataset_id, UUID) else str(dataset_id).replace("-", "")
-    return f"ds_{raw}"
+    if not isinstance(dataset_id, UUID):
+        raise ValueError("dataset_schema_name requires a dataset UUID")
+
+    return f"ds_{dataset_id.hex}"
 
 
 def _admin_connect_args() -> dict:
