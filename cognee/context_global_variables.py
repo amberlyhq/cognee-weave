@@ -28,6 +28,7 @@ from cognee.infrastructure.databases.utils.resolve_dataset_database_connection_i
 vector_db_config = ContextVar("vector_db_config", default=None)
 graph_db_config = ContextVar("graph_db_config", default=None)
 current_dataset_id: ContextVar[Optional[UUID]] = ContextVar("current_dataset_id", default=None)
+strict_database_scope: ContextVar[bool] = ContextVar("strict_database_scope", default=False)
 # Note: same mechanism for LLM and embedding configs so that the LiteLLM client
 #       and the embedding engine can use per-context (e.g. per-request) configs.
 llm_config: ContextVar[Optional[LLMConfig]] = ContextVar("llm_config", default=None)
@@ -131,6 +132,7 @@ class DatabaseContextManager:
         "_graph_token",
         "_vector_token",
         "_storage_token",
+        "_strict_scope_token",
         "_slot_acquired",
     )
 
@@ -154,6 +156,7 @@ class DatabaseContextManager:
         self._graph_token = None
         self._vector_token = None
         self._storage_token = None
+        self._strict_scope_token = None
         self._slot_acquired = False
 
     async def apply_database_context_variables(
@@ -294,6 +297,8 @@ class DatabaseContextManager:
         if self._applied:
             return
         try:
+            if self._restore_database_configs:
+                self._strict_scope_token = strict_database_scope.set(True)
             await self.apply_database_context_variables(self._dataset, self._user_id)
             self._applied = True
         except BaseException:
@@ -318,6 +323,7 @@ class DatabaseContextManager:
             (embedding_config, "_embedding_token"),
             (llm_config, "_llm_token"),
             (current_dataset_id, "_dataset_token"),
+            (strict_database_scope, "_strict_scope_token"),
         ):
             token = getattr(self, token_attr)
             if token is not None:

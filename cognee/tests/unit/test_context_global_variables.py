@@ -12,6 +12,7 @@ from cognee.context_global_variables import (
     graph_db_config,
     llm_config,
     set_database_global_context_variables,
+    strict_database_scope,
     vector_db_config,
 )
 from cognee.infrastructure.databases.vector.embeddings.config import EmbeddingConfig
@@ -225,6 +226,7 @@ async def test_strict_database_context_restores_outer_database_configs(monkeypat
         pytest.fail("strict database context API is missing")
 
     async with context_variables.scoped_database_context_variables(dataset_id, user_id):
+        assert strict_database_scope.get() is True
         assert graph_db_config.get()["graph_database_schema"] == schema
         assert vector_db_config.get()["vector_db_schema"] == schema
         assert file_storage_config.get() is not outer_storage
@@ -232,6 +234,7 @@ async def test_strict_database_context_restores_outer_database_configs(monkeypat
     assert graph_db_config.get() is outer_graph
     assert vector_db_config.get() is outer_vector
     assert file_storage_config.get() is outer_storage
+    assert strict_database_scope.get() is False
 
 
 @pytest.mark.asyncio

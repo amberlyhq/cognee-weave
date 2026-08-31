@@ -106,6 +106,38 @@ def _edge_identities(edges: list[EdgeIdentity]) -> list[tuple[str, str, str]]:
 # unlock path to forget. Reads never take it.
 _GRAPH_WRITE_LOCK_KEY = 5522063
 
+DEFAULT_NEIGHBORHOOD_FAN_OUT = 50
+DEFAULT_NEIGHBORHOOD_MAX_NODES = 500
+DEFAULT_NEIGHBORHOOD_MAX_EDGES = 1000
+DEFAULT_NEIGHBORHOOD_TIMEOUT_MS = 2000
+MAX_NEIGHBORHOOD_DEPTH = 8
+MAX_NEIGHBORHOOD_FAN_OUT = 100
+MAX_NEIGHBORHOOD_NODES = 2000
+MAX_NEIGHBORHOOD_EDGES = 4000
+MAX_NEIGHBORHOOD_TIMEOUT_MS = 10000
+
+
+def _validate_neighborhood_bounds(
+    *,
+    depth: int,
+    fan_out: int,
+    max_nodes: int,
+    max_edges: int,
+    statement_timeout_ms: int,
+) -> tuple[int, int, int, int, int]:
+    """Reject traversal work that exceeds the adapter's hard safety limits."""
+    bounds = (
+        ("depth", depth, 0, MAX_NEIGHBORHOOD_DEPTH),
+        ("fan_out", fan_out, 1, MAX_NEIGHBORHOOD_FAN_OUT),
+        ("max_nodes", max_nodes, 1, MAX_NEIGHBORHOOD_NODES),
+        ("max_edges", max_edges, 1, MAX_NEIGHBORHOOD_EDGES),
+        ("statement_timeout_ms", statement_timeout_ms, 1, MAX_NEIGHBORHOOD_TIMEOUT_MS),
+    )
+    for field, value, minimum, maximum in bounds:
+        if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
+            raise ValueError(f"{field} must be an integer between {minimum} and {maximum}")
+    return depth, fan_out, max_nodes, max_edges, statement_timeout_ms
+
 
 async def _lock_graph_writes(session: AsyncSession) -> None:
     """Serialize graph writes for the rest of this transaction."""
@@ -522,7 +554,10 @@ class PostgresDemoAdapter(GraphDBInterface):
         if not node_ids:
             return []
         result = await session.execute(
-            text("SELECT id, name, type, properties FROM graph_node WHERE id = ANY(:ids)"),
+            text(
+                "SELECT id, name, type, properties FROM graph_node "
+                "WHERE id = ANY(:ids) ORDER BY id"
+            ),
             {"ids": node_ids},
         )
         nodes = []
@@ -736,47 +771,95 @@ class PostgresDemoAdapter(GraphDBInterface):
         node_ids: List[str],
         depth: int = 1,
         edge_types: Optional[List[str]] = None,
+        *,
+        fan_out: int = DEFAULT_NEIGHBORHOOD_FAN_OUT,
+        max_nodes: int = DEFAULT_NEIGHBORHOOD_MAX_NODES,
+        max_edges: int = DEFAULT_NEIGHBORHOOD_MAX_EDGES,
+        statement_timeout_ms: int = DEFAULT_NEIGHBORHOOD_TIMEOUT_MS,
     ) -> Tuple[List[Tuple[str, Dict[str, Any]]], List[Tuple[str, str, str, Dict[str, Any]]]]:
-        """Walk incident edges breadth-first and return the induced subgraph."""
-        if depth < 0:
-            raise ValueError("depth must be non-negative")
+        """Return a deterministic, bounded neighborhood using one recursive CTE."""
+        depth, fan_out, max_nodes, max_edges, statement_timeout_ms = (
+            _validate_neighborhood_bounds(
+                depth=depth,
+                fan_out=fan_out,
+                max_nodes=max_nodes,
+                max_edges=max_edges,
+                statement_timeout_ms=statement_timeout_ms,
+            )
+        )
         if not node_ids:
             return [], []
 
-        reached = {str(node_id) for node_id in node_ids}
-        frontier = set(reached)
-        unfiltered_hop = text("""
-            SELECT source_id, target_id FROM graph_edge
-            WHERE source_id = ANY(:ids) OR target_id = ANY(:ids)
+        edge_type_filter = ""
+        params: dict[str, Any] = {
+            "seed_ids": sorted({str(node_id) for node_id in node_ids}),
+            "depth": depth,
+            "fan_out": fan_out,
+            "max_nodes": max_nodes,
+            "max_edges": max_edges,
+        }
+        if edge_types:
+            edge_type_filter = "AND edge.relationship_name = ANY(:edge_types)"
+            params["edge_types"] = sorted({str(edge_type) for edge_type in edge_types})
+
+        traversal = text(f"""
+            WITH RECURSIVE walk(node_id, hop) AS (
+                SELECT seed.node_id, 0
+                FROM unnest(CAST(:seed_ids AS text[])) AS seed(node_id)
+                UNION
+                SELECT neighbor.node_id, walk.hop + 1
+                FROM walk
+                JOIN LATERAL (
+                    SELECT CASE
+                        WHEN edge.source_id = walk.node_id THEN edge.target_id
+                        ELSE edge.source_id
+                    END AS node_id
+                    FROM graph_edge AS edge
+                    WHERE (edge.source_id = walk.node_id OR edge.target_id = walk.node_id)
+                      {edge_type_filter}
+                    ORDER BY edge.relationship_name, edge.source_id, edge.target_id
+                    LIMIT :fan_out
+                ) AS neighbor ON TRUE
+                WHERE walk.hop < :depth
+            ),
+            reached AS (
+                SELECT node_id, MIN(hop) AS first_hop
+                FROM walk
+                GROUP BY node_id
+                ORDER BY first_hop, node_id
+                LIMIT :max_nodes
+            )
+            SELECT node_id FROM reached ORDER BY first_hop, node_id
         """)
-        filtered_hop = text("""
-            SELECT source_id, target_id FROM graph_edge
-            WHERE (source_id = ANY(:ids) OR target_id = ANY(:ids))
-              AND relationship_name = ANY(:edge_types)
+
+        edge_query = text(f"""
+            SELECT edge.source_id, edge.target_id, edge.relationship_name, edge.properties
+            FROM graph_edge AS edge
+            WHERE edge.source_id = ANY(:ids) AND edge.target_id = ANY(:ids)
+              {edge_type_filter}
+            ORDER BY edge.source_id, edge.target_id, edge.relationship_name
+            LIMIT :max_edges
         """)
 
         async with self.sessionmaker() as session:
-            for _ in range(depth):
-                if not frontier:
-                    break
-                params = {"ids": list(frontier)}
-                statement = unfiltered_hop
-                if edge_types:
-                    statement = filtered_hop
-                    params["edge_types"] = [str(edge_type) for edge_type in edge_types]
-                result = await session.execute(statement, params)
-
-                next_frontier = set()
-                for row in result.mappings().all():
-                    for endpoint in (row["source_id"], row["target_id"]):
-                        if endpoint not in reached:
-                            reached.add(endpoint)
-                            next_frontier.add(endpoint)
-                frontier = next_frontier
-
-            subgraph_ids = list(reached)
+            await session.execute(
+                text("SELECT set_config('statement_timeout', :timeout, true)"),
+                {"timeout": f"{statement_timeout_ms}ms"},
+            )
+            reached = await session.execute(traversal, params)
+            subgraph_ids = [row["node_id"] for row in reached.mappings().all()]
             nodes = await self._fetch_nodes_by_id(session, subgraph_ids)
-            edges = await self._fetch_edges_within(session, subgraph_ids)
+            edge_params = {**params, "ids": subgraph_ids}
+            edge_result = await session.execute(edge_query, edge_params)
+            edges = [
+                (
+                    row["source_id"],
+                    row["target_id"],
+                    row["relationship_name"],
+                    _decode_properties(row["properties"]),
+                )
+                for row in edge_result.mappings().all()
+            ]
             return nodes, edges
 
     async def delete_graph(self) -> None:

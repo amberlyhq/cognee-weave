@@ -1,6 +1,9 @@
+import asyncio
+
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
+from cognee.modules.retrieval.graph_completion_retriever import GraphCompletionRetriever
 from cognee.modules.retrieval.graph_completion_context_extension_retriever import (
     GraphCompletionContextExtensionRetriever,
 )
@@ -27,6 +30,46 @@ async def test_get_triplets_inherited(mock_edge):
 
     assert len(triplets) == 1
     assert triplets[0] == mock_edge
+
+
+@pytest.mark.asyncio
+async def test_concurrent_retrievals_keep_their_resolved_tenant_engines():
+    both_checked_empty = asyncio.Barrier(2)
+
+    class TenantGraph:
+        async def is_empty(self):
+            await both_checked_empty.wait()
+            return False
+
+    first_engine = MagicMock(graph=TenantGraph(), vector=MagicMock(), tenant="first")
+    second_engine = MagicMock(graph=TenantGraph(), vector=MagicMock(), tenant="second")
+
+    async def return_engine_marker(*_args, unified_engine=None, **_kwargs):
+        return [unified_engine.tenant]
+
+    retriever = GraphCompletionRetriever()
+    with (
+        patch(
+            "cognee.modules.retrieval.graph_completion_retriever.get_unified_engine",
+            new_callable=AsyncMock,
+            side_effect=[first_engine, second_engine],
+        ),
+        patch(
+            "cognee.modules.retrieval.graph_completion_retriever.brute_force_triplet_search",
+            side_effect=return_engine_marker,
+        ),
+        patch(
+            "cognee.modules.retrieval.graph_completion_retriever.CacheConfig"
+        ) as mock_cache_config,
+    ):
+        mock_cache_config.return_value.caching = False
+        first, second = await asyncio.gather(
+            retriever.get_retrieved_objects(query="first query"),
+            retriever.get_retrieved_objects(query="second query"),
+        )
+
+    assert first == ["first"]
+    assert second == ["second"]
 
 
 @pytest.mark.asyncio
