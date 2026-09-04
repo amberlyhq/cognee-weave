@@ -25,6 +25,7 @@ Amberly for its Postgres-only, tenant-scoped memory and code-context needs.
 Upstream is reviewed weekly. Automation may fetch an exact upstream SHA,
 create a synchronization branch, and open or update a pull request. It must
 never merge automatically or push directly to the protected default branch.
+The implementation lives in `.github/workflows/upstream-sync.yml`.
 
 Every synchronization pull request must:
 

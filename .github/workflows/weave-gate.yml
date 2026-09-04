@@ -18,8 +18,8 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           python-version: "3.11"
           enable-cache: true
@@ -33,6 +33,8 @@ jobs:
           cognee/tests/unit/test_context_global_variables.py
           cognee/tests/unit/infrastructure/databases/graph/test_postgres_adapter.py
           cognee/tests/unit/infrastructure/databases/vector
+          cognee/tests/unit/modules/weave
+          cognee/tests/unit/api/v1/weave/test_internal_auth.py
           --timeout=300 --timeout-method=thread
       - name: Build wheel and source distribution
         run: uv build
@@ -42,7 +44,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: pgvector/pgvector:pg17
+        image: pgvector/pgvector:0.8.6-pg17-bookworm
         env:
           POSTGRES_USER: cognee
           POSTGRES_PASSWORD: cognee
@@ -65,18 +67,35 @@ jobs:
       DB_NAME: cognee_db
       VECTOR_DB_PROVIDER: pgvector
       VECTOR_DATASET_DATABASE_HANDLER: pgvector_shared
+      VECTOR_DB_HOST: 127.0.0.1
+      VECTOR_DB_PORT: "5432"
+      VECTOR_DB_USERNAME: cognee
+      VECTOR_DB_PASSWORD: cognee
+      VECTOR_DB_NAME: cognee_db
       GRAPH_DATABASE_PROVIDER: postgres_demo
       GRAPH_DATASET_DATABASE_HANDLER: postgres_graph_shared
+      GRAPH_DATABASE_HOST: 127.0.0.1
+      GRAPH_DATABASE_PORT: "5432"
+      GRAPH_DATABASE_USERNAME: cognee
+      GRAPH_DATABASE_PASSWORD: cognee
+      GRAPH_DATABASE_NAME: cognee_db
       COGNEE_SKIP_CONNECTION_TEST: "true"
     steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           python-version: "3.11"
           enable-cache: true
       - name: Install locked Postgres dependencies
         run: uv sync --locked --dev --extra postgres
-      - name: Shared-schema isolation
+      - name: Postgres tenant, index, recall, and deletion gates
         run: >-
-          uv run pytest cognee/tests/e2e/postgres/test_shared_schema_isolation.py
+          uv run pytest
+          cognee/tests/e2e/postgres/test_shared_schema_isolation.py
+          cognee/tests/e2e/postgres/test_shared_schema_concurrency.py
+          cognee/tests/e2e/postgres/test_tenant_graph_retrieval.py
+          cognee/tests/e2e/postgres/test_pgvector_hnsw_plan.py
+          cognee/tests/e2e/postgres/test_weave_exact_sha_indexing.py
+          cognee/tests/e2e/postgres/test_weave_hybrid_recall.py
+          cognee/tests/e2e/postgres/test_weave_surface_isolation.py
           --timeout=300 --timeout-method=thread -v

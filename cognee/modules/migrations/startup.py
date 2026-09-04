@@ -299,6 +299,14 @@ async def apply_all_migrations(
             # rather than replaying history. A partial relational_target only makes
             # sense for an existing DB — a fresh one is head by construction.
             logger.info("Fresh database: creating schema and stamping at head.")
+            # Keep this in sync with alembic/env.py. create_all only sees models
+            # imported into Base.metadata, and the entrypoint runs before the API
+            # routers import the fork-specific Weave control-plane models.
+            import cognee.modules.session_lifecycle.models  # noqa: F401
+            import cognee.modules.migrations.models  # noqa: F401
+            import cognee.modules.provenance.models  # noqa: F401
+            import cognee.modules.weave.models  # noqa: F401
+
             await get_relational_engine().create_database()
             await run_relational_stamp("head", script_location)
 

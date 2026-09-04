@@ -75,6 +75,12 @@
 # -----------------------------------------------------------------------------
 /UPSTREAM.md                                       @XSIRIX
 /.github/workflows/weave-gate.yml                  @XSIRIX
+/.github/workflows/upstream-sync.yml               @XSIRIX
+/deployment/docker-compose.weave.yml               @XSIRIX
+/scripts/weave-parity.sh                           @XSIRIX
+/scripts/weave-backup.sh                           @XSIRIX
+/scripts/weave-restore-drill.sh                    @XSIRIX
+/docs/weave/                                       @XSIRIX
 /cognee/context_global_variables.py                @XSIRIX
 /cognee/infrastructure/databases/graph/postgres_demo/ @XSIRIX
 /cognee/infrastructure/databases/vector/pgvector/  @XSIRIX

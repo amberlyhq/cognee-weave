@@ -1,0 +1,67 @@
+name: cognee-weave-parity
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg17-bookworm
+    environment:
+      POSTGRES_USER: cognee
+      POSTGRES_PASSWORD: ${WEAVE_DB_PASSWORD:?WEAVE_DB_PASSWORD is required}
+      POSTGRES_DB: cognee_db
+    ports:
+      - "127.0.0.1:${WEAVE_POSTGRES_PORT:-15432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cognee -d cognee_db"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - weave-postgres:/var/lib/postgresql/data
+
+  weave:
+    image: cognee-weave-parity:local
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    environment:
+      ENV: prod
+      HTTP_PORT: "8000"
+      WEAVE_STRICT_MODE: "true"
+      WEAVE_INTERNAL_TOKEN: ${WEAVE_INTERNAL_TOKEN:?WEAVE_INTERNAL_TOKEN is required}
+      ENABLE_BACKEND_ACCESS_CONTROL: "true"
+      DB_PROVIDER: postgres
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USERNAME: cognee
+      DB_PASSWORD: ${WEAVE_DB_PASSWORD:?WEAVE_DB_PASSWORD is required}
+      DB_NAME: cognee_db
+      VECTOR_DB_PROVIDER: pgvector
+      VECTOR_DATASET_DATABASE_HANDLER: pgvector_shared
+      VECTOR_DB_HOST: postgres
+      VECTOR_DB_PORT: "5432"
+      VECTOR_DB_USERNAME: cognee
+      VECTOR_DB_PASSWORD: ${WEAVE_DB_PASSWORD:?WEAVE_DB_PASSWORD is required}
+      VECTOR_DB_NAME: cognee_db
+      GRAPH_DATABASE_PROVIDER: postgres_demo
+      GRAPH_DATASET_DATABASE_HANDLER: postgres_graph_shared
+      GRAPH_DATABASE_HOST: postgres
+      GRAPH_DATABASE_PORT: "5432"
+      GRAPH_DATABASE_USERNAME: cognee
+      GRAPH_DATABASE_PASSWORD: ${WEAVE_DB_PASSWORD:?WEAVE_DB_PASSWORD is required}
+      GRAPH_DATABASE_NAME: cognee_db
+      WEAVE_EMBEDDING_PROVIDER: fastembed
+      WEAVE_EMBEDDING_MODEL: BAAI/bge-small-en-v1.5
+      WEAVE_EMBEDDING_DIMENSIONS: "384"
+      COGNEE_SKIP_CONNECTION_TEST: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${WEAVE_HTTP_PORT:-18000}:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 10s
+      retries: 60
+
+volumes:
+  weave-postgres:
