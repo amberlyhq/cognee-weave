@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID
 
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 
 from cognee.context_global_variables import scoped_database_context_variables
 from cognee.infrastructure.databases.graph import get_graph_engine
@@ -378,11 +378,13 @@ async def _load_organization_for_delete(
         )
         if record is None:
             raise SurfaceNotFound()
-        if lifecycle_generation <= record.observed_lifecycle_generation:
+        if lifecycle_generation <= record.lifecycle_generation:
             return None, None
         if record.deleted_at is not None:
             record.lifecycle_generation = lifecycle_generation
-            record.observed_lifecycle_generation = lifecycle_generation
+            record.observed_lifecycle_generation = max(
+                record.observed_lifecycle_generation, lifecycle_generation
+            )
             await session.commit()
             return None, None
         database = await session.scalar(
@@ -418,7 +420,9 @@ async def _mark_organization_deleted(organization_id: UUID, lifecycle_generation
         deleted_at = _now()
         record.deleted_at = deleted_at
         record.lifecycle_generation = lifecycle_generation
-        record.observed_lifecycle_generation = lifecycle_generation
+        record.observed_lifecycle_generation = max(
+            record.observed_lifecycle_generation, lifecycle_generation
+        )
         await session.execute(
             update(WeaveRepositorySnapshot)
             .where(
@@ -429,11 +433,13 @@ async def _mark_organization_deleted(organization_id: UUID, lifecycle_generation
         )
         await session.execute(
             update(WeaveRepositoryLifecycle)
-            .where(
-                WeaveRepositoryLifecycle.organization_id == organization_id,
-                WeaveRepositoryLifecycle.lifecycle_generation < lifecycle_generation,
+            .where(WeaveRepositoryLifecycle.organization_id == organization_id)
+            .values(
+                active=False,
+                lifecycle_generation=func.greatest(
+                    WeaveRepositoryLifecycle.lifecycle_generation, lifecycle_generation
+                ),
             )
-            .values(active=False, lifecycle_generation=lifecycle_generation)
         )
         await session.commit()
 

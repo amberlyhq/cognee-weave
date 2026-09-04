@@ -290,7 +290,7 @@ class CogneeOrganizationProvisioningBackend:
                 await lock_session.commit()
                 return _binding_result(existing)
 
-            if lifecycle_generation <= existing.observed_lifecycle_generation:
+            if lifecycle_generation <= existing.lifecycle_generation:
                 return _binding_result(existing) if existing.deleted_at is None else None
             if existing.deleted_at is not None:
                 service_user = await lock_session.scalar(
@@ -308,7 +308,9 @@ class CogneeOrganizationProvisioningBackend:
                 await self._recreate_shared_database(existing.primary_dataset_id, service_user)
                 existing.deleted_at = None
             existing.lifecycle_generation = lifecycle_generation
-            existing.observed_lifecycle_generation = lifecycle_generation
+            existing.observed_lifecycle_generation = max(
+                existing.observed_lifecycle_generation, lifecycle_generation
+            )
             await lock_session.commit()
             return _binding_result(existing)
 

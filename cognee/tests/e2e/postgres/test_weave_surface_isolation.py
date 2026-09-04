@@ -190,9 +190,9 @@ async def test_every_surface_stays_scoped_through_repository_and_organization_de
     assert graph_engine_cache.is_cached(**graph_config_b)
     assert vector_engine_cache.is_cached(**vector_config_b)
 
+    # An installation deletion governs organization existence even when a
+    # newer repository event was observed first.
     await delete_organization(organization_a, 2)
-    assert await get_organization_binding(organization_a) is not None
-    await delete_organization(organization_a, 4)
     assert not graph_engine_cache.is_cached(**graph_config_a)
     assert not vector_engine_cache.is_cached(**vector_config_a)
     assert graph_engine_cache.is_cached(**graph_config_b)
@@ -220,21 +220,21 @@ async def test_every_surface_stays_scoped_through_repository_and_organization_de
 
     with pytest.raises(OrganizationDeletedError):
         await provision_organization(organization_a)
-    assert await reactivate_organization(organization_a, 3) is None
-    reprovisioned_a = await reactivate_organization(organization_a, 5)
+    assert await reactivate_organization(organization_a, 1) is None
+    reprovisioned_a = await reactivate_organization(organization_a, 4)
     assert reprovisioned_a is not None
     assert reprovisioned_a.dataset_id == binding_a.dataset_id
     # A repository event older than the organization reactivation cannot cross
     # the organization epoch barrier, even if it is newer than repository state.
-    await activate_repository(organization_a, alpha_request.github_repository_id, 4)
-    object.__setattr__(alpha_request, "lifecycle_generation", 4)
+    await activate_repository(organization_a, alpha_request.github_repository_id, 3)
+    object.__setattr__(alpha_request, "lifecycle_generation", 3)
     with pytest.raises(RepositoryDeletedError):
         await index_repository_archive(
             alpha_request,
             _archive(tmp_path, alpha_request.repository_name, alpha_marker),
         )
-    await activate_repository(organization_a, alpha_request.github_repository_id, 5)
-    object.__setattr__(alpha_request, "lifecycle_generation", 5)
+    await activate_repository(organization_a, alpha_request.github_repository_id, 4)
+    object.__setattr__(alpha_request, "lifecycle_generation", 4)
     await index_repository_archive(
         alpha_request,
         _archive(tmp_path, alpha_request.repository_name, alpha_marker),
