@@ -174,6 +174,8 @@ async def _repository_transition_is_newer(
             raise SurfaceNotFound()
         if binding.deleted_at is not None:
             return False
+        if lifecycle_generation < binding.lifecycle_generation:
+            return False
         lifecycle = await session.scalar(
             select(WeaveRepositoryLifecycle)
             .where(
@@ -211,8 +213,8 @@ async def _publish_repository_transition(
         )
         if binding is None or binding.deleted_at is not None:
             return
-        if lifecycle_generation > binding.lifecycle_generation:
-            binding.lifecycle_generation = lifecycle_generation
+        if lifecycle_generation < binding.lifecycle_generation:
+            return
         lifecycle = await session.scalar(
             select(WeaveRepositoryLifecycle)
             .where(
@@ -223,6 +225,9 @@ async def _publish_repository_transition(
         )
         if lifecycle is not None and lifecycle_generation <= lifecycle.lifecycle_generation:
             return
+        binding.observed_lifecycle_generation = max(
+            binding.observed_lifecycle_generation, lifecycle_generation
+        )
         if lifecycle is None:
             lifecycle = WeaveRepositoryLifecycle(
                 organization_id=organization_id,
@@ -373,10 +378,11 @@ async def _load_organization_for_delete(
         )
         if record is None:
             raise SurfaceNotFound()
-        if lifecycle_generation <= record.lifecycle_generation:
+        if lifecycle_generation <= record.observed_lifecycle_generation:
             return None, None
         if record.deleted_at is not None:
             record.lifecycle_generation = lifecycle_generation
+            record.observed_lifecycle_generation = lifecycle_generation
             await session.commit()
             return None, None
         database = await session.scalar(
@@ -412,6 +418,7 @@ async def _mark_organization_deleted(organization_id: UUID, lifecycle_generation
         deleted_at = _now()
         record.deleted_at = deleted_at
         record.lifecycle_generation = lifecycle_generation
+        record.observed_lifecycle_generation = lifecycle_generation
         await session.execute(
             update(WeaveRepositorySnapshot)
             .where(

@@ -60,6 +60,7 @@ def test_repository_and_job_tables_are_organization_scoped():
     assert {column.name for column in WeaveRepositorySnapshot.__table__.primary_key} == {"id"}
     assert {column.name for column in WeaveIndexJob.__table__.primary_key} == {"id"}
     assert WeaveOrganizationBinding.__table__.c.lifecycle_generation.nullable is False
+    assert WeaveOrganizationBinding.__table__.c.observed_lifecycle_generation.nullable is False
     assert WeaveRepositoryLifecycle.__table__.c.lifecycle_generation.nullable is False
     assert WeaveRepositoryLifecycle.__table__.c.active.nullable is False
     assert {column.name for column in WeaveRepositoryLifecycle.__table__.primary_key} == {

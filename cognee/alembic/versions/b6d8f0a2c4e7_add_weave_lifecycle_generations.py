@@ -25,6 +25,15 @@ def upgrade() -> None:
         "weave_organization_bindings",
         sa.Column("lifecycle_generation", sa.BigInteger(), server_default="0", nullable=False),
     )
+    op.add_column(
+        "weave_organization_bindings",
+        sa.Column(
+            "observed_lifecycle_generation",
+            sa.BigInteger(),
+            server_default="0",
+            nullable=False,
+        ),
+    )
     op.create_table(
         "weave_repository_lifecycles",
         sa.Column("organization_id", sa.UUID(), nullable=False),
@@ -58,4 +67,5 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("weave_repository_lifecycles")
+    op.drop_column("weave_organization_bindings", "observed_lifecycle_generation")
     op.drop_column("weave_organization_bindings", "lifecycle_generation")

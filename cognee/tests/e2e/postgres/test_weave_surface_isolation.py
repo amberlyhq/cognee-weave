@@ -224,6 +224,21 @@ async def test_every_surface_stays_scoped_through_repository_and_organization_de
     reprovisioned_a = await reactivate_organization(organization_a, 5)
     assert reprovisioned_a is not None
     assert reprovisioned_a.dataset_id == binding_a.dataset_id
+    # A repository event older than the organization reactivation cannot cross
+    # the organization epoch barrier, even if it is newer than repository state.
+    await activate_repository(organization_a, alpha_request.github_repository_id, 4)
+    object.__setattr__(alpha_request, "lifecycle_generation", 4)
+    with pytest.raises(RepositoryDeletedError):
+        await index_repository_archive(
+            alpha_request,
+            _archive(tmp_path, alpha_request.repository_name, alpha_marker),
+        )
+    await activate_repository(organization_a, alpha_request.github_repository_id, 5)
+    object.__setattr__(alpha_request, "lifecycle_generation", 5)
+    await index_repository_archive(
+        alpha_request,
+        _archive(tmp_path, alpha_request.repository_name, alpha_marker),
+    )
     async with engine.get_async_session() as session:
         recreated_schema_exists = await session.scalar(
             text("SELECT to_regnamespace(:schema) IS NOT NULL"),

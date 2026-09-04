@@ -321,8 +321,10 @@ class PostgresIndexStateStore:
             )
             if binding is None or binding.deleted_at is not None:
                 raise LookupError("Organization not found")
-            if request.lifecycle_generation > binding.lifecycle_generation:
-                binding.lifecycle_generation = request.lifecycle_generation
+            if request.lifecycle_generation < binding.lifecycle_generation:
+                raise RepositoryDeletedError(
+                    "Repository lifecycle predates the current organization lifecycle"
+                )
 
             snapshot = await session.scalar(
                 select(WeaveRepositorySnapshot).where(
@@ -349,6 +351,9 @@ class PostgresIndexStateStore:
                 raise RepositoryDeletedError(
                     "Repository is removed; a verified installation event must reactivate it"
                 )
+            binding.observed_lifecycle_generation = max(
+                binding.observed_lifecycle_generation, request.lifecycle_generation
+            )
             if lifecycle is None:
                 lifecycle = WeaveRepositoryLifecycle(
                     organization_id=request.organization_id,
