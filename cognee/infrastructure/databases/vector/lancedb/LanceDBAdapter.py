@@ -980,10 +980,13 @@ class LanceDBAdapter(VectorDBInterface):
             # If collection doesn't exist, return empty list (no items to retrieve)
             return []
 
-        if len(data_point_ids) == 1:
-            query = collection.query().where(f"id = '{data_point_ids[0]}'")
+        escaped_ids = [str(data_point_id).replace("'", "''") for data_point_id in data_point_ids]
+        if len(escaped_ids) == 1:
+            where_clause = f"id = '{escaped_ids[0]}'"
         else:
-            query = collection.query().where(f"id IN {tuple(data_point_ids)}")
+            id_list = ", ".join(f"'{escaped_id}'" for escaped_id in escaped_ids)
+            where_clause = f"id IN ({id_list})"
+        query = collection.query().where(where_clause)
 
         # Convert query results to list format
         results_list = await query.to_list()

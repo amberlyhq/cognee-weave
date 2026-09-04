@@ -85,6 +85,8 @@ services:
       WEAVE_EMBEDDING_PROVIDER: fastembed
       WEAVE_EMBEDDING_MODEL: BAAI/bge-small-en-v1.5
       WEAVE_EMBEDDING_DIMENSIONS: "384"
+      ENOLA_PATH: /app/.cognee/bin/enola-0.3.13-linux-arm64
+      ENOLA_AUTO_INSTALL: "false"
       COGNEE_SKIP_CONNECTION_TEST: "true"
     depends_on:
       postgres:

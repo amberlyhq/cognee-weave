@@ -40,11 +40,42 @@ END;
 $function$
 """
 
+_DROP_ORGANIZATION_SCHEMA_FUNCTION = """
+CREATE OR REPLACE FUNCTION public.weave_drop_organization_dataset_schema(
+    target_organization_id uuid
+) RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $function$
+DECLARE
+    bound_dataset_id uuid;
+    schema_name text;
+BEGIN
+    IF NULLIF(current_setting('app.weave_organization_id', true), '')::uuid
+        IS DISTINCT FROM target_organization_id THEN
+        RAISE EXCEPTION 'Weave organization scope mismatch';
+    END IF;
+    SELECT primary_dataset_id
+      INTO bound_dataset_id
+      FROM public.weave_organization_bindings
+     WHERE organization_id = target_organization_id
+       AND deleted_at IS NULL;
+    IF bound_dataset_id IS NULL THEN
+        RAISE EXCEPTION 'Active Weave organization binding not found';
+    END IF;
+    schema_name := 'ds_' || replace(bound_dataset_id::text, '-', '');
+    EXECUTE format('DROP SCHEMA IF EXISTS %I CASCADE', schema_name);
+END;
+$function$
+"""
+
 _RUNTIME_GRANTS = """
 DO $grant$
 BEGIN
     IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'cognee') THEN
         GRANT EXECUTE ON FUNCTION public.weave_create_dataset_schema(text, boolean) TO cognee;
+        GRANT EXECUTE ON FUNCTION public.weave_drop_organization_dataset_schema(uuid) TO cognee;
         GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO cognee;
         GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO cognee;
         ALTER DEFAULT PRIVILEGES IN SCHEMA public
@@ -79,10 +110,17 @@ async def ensure_weave_rls_policies() -> None:
                 )
             )
         await session.execute(text(_CREATE_SCHEMA_FUNCTION))
+        await session.execute(text(_DROP_ORGANIZATION_SCHEMA_FUNCTION))
         await session.execute(
             text(
                 "REVOKE ALL ON FUNCTION "
                 "public.weave_create_dataset_schema(text, boolean) FROM PUBLIC"
+            )
+        )
+        await session.execute(
+            text(
+                "REVOKE ALL ON FUNCTION "
+                "public.weave_drop_organization_dataset_schema(uuid) FROM PUBLIC"
             )
         )
         await session.execute(text(_RUNTIME_GRANTS))

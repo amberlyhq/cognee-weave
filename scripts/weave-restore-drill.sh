@@ -44,15 +44,15 @@ trap cleanup EXIT
 docker compose -p "$restore_project" -f "$compose_file" up -d postgres
 for _ in $(seq 1 60); do
   if docker compose -p "$restore_project" -f "$compose_file" exec -T postgres \
-    pg_isready --username=cognee --dbname=cognee_db >/dev/null 2>&1; then
+    pg_isready --username=cognee_admin --dbname=cognee_db >/dev/null 2>&1; then
     break
   fi
   sleep 2
 done
 docker compose -p "$restore_project" -f "$compose_file" exec -T postgres \
-  pg_isready --username=cognee --dbname=cognee_db >/dev/null
+  pg_isready --username=cognee_admin --dbname=cognee_db >/dev/null
 docker compose -p "$restore_project" -f "$compose_file" exec -T postgres \
-  pg_restore --username=cognee --dbname=cognee_db --clean --if-exists --no-owner --no-acl --exit-on-error < "$backup_path"
+  pg_restore --username=cognee_admin --dbname=cognee_db --clean --if-exists --exit-on-error < "$backup_path"
 docker compose -p "$restore_project" -f "$compose_file" up -d weave
 
 base_url="http://127.0.0.1:${WEAVE_HTTP_PORT}"

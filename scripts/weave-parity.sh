@@ -104,15 +104,16 @@ if [ "$fixture_index_seconds_b" -gt 300 ]; then
   echo "beta fixture indexing exceeded the 5-minute gate" >&2
   exit 1
 fi
+export WEAVE_STRICT_MODE=false
 export DB_PROVIDER=postgres DB_HOST=127.0.0.1 DB_PORT="$WEAVE_POSTGRES_PORT"
-export DB_USERNAME=cognee DB_PASSWORD="$WEAVE_DB_PASSWORD" DB_NAME=cognee_db
+export DB_USERNAME=cognee_admin DB_PASSWORD="$WEAVE_DB_PASSWORD" DB_NAME=cognee_db
 export ENABLE_BACKEND_ACCESS_CONTROL=true VECTOR_DB_PROVIDER=pgvector
 export VECTOR_DATASET_DATABASE_HANDLER=pgvector_shared GRAPH_DATABASE_PROVIDER=postgres_demo
 export GRAPH_DATASET_DATABASE_HANDLER=postgres_graph_shared COGNEE_SKIP_CONNECTION_TEST=true
 export VECTOR_DB_HOST=127.0.0.1 VECTOR_DB_PORT="$WEAVE_POSTGRES_PORT"
-export VECTOR_DB_USERNAME=cognee VECTOR_DB_PASSWORD="$WEAVE_DB_PASSWORD" VECTOR_DB_NAME=cognee_db
+export VECTOR_DB_USERNAME=cognee_admin VECTOR_DB_PASSWORD="$WEAVE_DB_PASSWORD" VECTOR_DB_NAME=cognee_db
 export GRAPH_DATABASE_HOST=127.0.0.1 GRAPH_DATABASE_PORT="$WEAVE_POSTGRES_PORT"
-export GRAPH_DATABASE_USERNAME=cognee GRAPH_DATABASE_PASSWORD="$WEAVE_DB_PASSWORD"
+export GRAPH_DATABASE_USERNAME=cognee_admin GRAPH_DATABASE_PASSWORD="$WEAVE_DB_PASSWORD"
 export GRAPH_DATABASE_NAME=cognee_db
 
 if [ -x "$root/.venv/bin/pytest" ]; then
@@ -152,6 +153,14 @@ PYTHON
 if curl -fsS -H "Authorization: Bearer ${WEAVE_INTERNAL_TOKEN}" \
   "$base_url/api/v1/weave/organizations/${organization_a}/export?repository_id=${repository_b}" >/dev/null 2>&1; then
   echo "foreign repository export unexpectedly succeeded" >&2
+  exit 1
+fi
+
+if docker compose -p "$project" -f "$compose_file" exec -T postgres \
+  psql --set ON_ERROR_STOP=1 --username=cognee --dbname=cognee_db \
+  -c "SELECT set_config('app.weave_organization_id', '${organization_a}', false); SELECT public.weave_drop_organization_dataset_schema('${organization_b}'::uuid)" \
+  >/dev/null 2>&1; then
+  echo "cross-organization schema deletion unexpectedly succeeded" >&2
   exit 1
 fi
 

@@ -122,6 +122,16 @@ USER cognee
 RUN python -c "from cognee_db_workers._kuzu_helpers import install_json_extension_local; install_json_extension_local(buffer_pool_size=268435456)" \
     || echo "WARNING: JSON extension pre-install skipped (no network at build time); it will be installed on first run if the container has network access."
 
+# Weave indexing must not download required tools or models on the first
+# customer request. Keep each asset in its own build layer so a slow provider
+# cannot throw away downloads that already finished.
+RUN python -c "from cognee.tasks.code_graph.install_enola import install_enola; install_enola()"
+RUN python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('BAAI/bge-small-en-v1.5')"
+RUN python -c "from fastembed import TextEmbedding; list(TextEmbedding(model_name='BAAI/bge-small-en-v1.5').embed(['weave image warmup']))"
+
+ENV ENOLA_AUTO_INSTALL=false
+ENV ENOLA_PATH=/app/.cognee/bin/enola-0.3.13-linux-arm64
+
 ENTRYPOINT ["/app/entrypoint.sh"]
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \

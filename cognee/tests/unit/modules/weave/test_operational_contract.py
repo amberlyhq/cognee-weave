@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -70,6 +71,23 @@ def test_fresh_database_registers_weave_models_before_create_all():
     assert startup.index(fresh_create) < startup.index("await ensure_weave_rls_policies()")
 
 
+@pytest.mark.asyncio
+async def test_strict_runtime_pipeline_does_not_attempt_global_relational_ddl(monkeypatch):
+    from cognee.modules.pipelines.layers import setup_and_check_environment as setup_module
+
+    relational_create = AsyncMock()
+    vector_create = AsyncMock()
+    monkeypatch.setenv("WEAVE_STRICT_MODE", "true")
+    monkeypatch.setattr(setup_module, "create_relational_db_and_tables", relational_create)
+    monkeypatch.setattr(setup_module, "create_pgvector_db_and_tables", vector_create)
+    monkeypatch.setattr(setup_module, "_first_run_done", True)
+
+    await setup_module.setup_and_check_environment(skip_connection_test=True)
+
+    relational_create.assert_not_awaited()
+    vector_create.assert_awaited_once_with()
+
+
 def test_rls_covers_every_shared_control_plane_table_on_fresh_and_existing_databases():
     original_migration = (
         ROOT / "cognee/alembic/versions/d1e3f5a7b9c2_add_weave_organization_control_plane.py"
@@ -79,6 +97,12 @@ def test_rls_covers_every_shared_control_plane_table_on_fresh_and_existing_datab
     )
     assert forward_migration_path.exists()
     forward_migration = forward_migration_path.read_text()
+    deletion_migration_path = (
+        ROOT
+        / "cognee/alembic/versions/a5c7e9b1d3f6_add_scoped_weave_schema_deletion.py"
+    )
+    assert deletion_migration_path.exists()
+    deletion_migration = deletion_migration_path.read_text()
     runtime_security = (ROOT / "cognee/modules/weave/rls.py").read_text()
     postgres_admin = (ROOT / "cognee/infrastructure/databases/postgres/admin.py").read_text()
     compose = (ROOT / "deployment/docker-compose.weave.yml").read_text()
@@ -101,10 +125,19 @@ def test_rls_covers_every_shared_control_plane_table_on_fresh_and_existing_datab
     assert "ALTER DATABASE cognee_db OWNER TO cognee" not in init
     assert "weave_create_dataset_schema" in init
     assert "weave_create_dataset_schema" in postgres_admin
+    assert "weave_drop_organization_dataset_schema" in init
+    assert "weave_drop_organization_dataset_schema" not in forward_migration
+    assert 'down_revision: Union[str, None] = "f3a5c7e9b1d4"' in deletion_migration
+    assert "weave_drop_organization_dataset_schema" in deletion_migration
+    assert "weave_drop_organization_dataset_schema" in runtime_security
+    for source in (init, deletion_migration, runtime_security):
+        assert "primary_dataset_id" in source
+        assert "app.weave_organization_id" in source
     assert 'os.getenv("WEAVE_STRICT_MODE") == "true"' in postgres_admin
     assert "datdba" in runtime_security
     assert "relowner" in runtime_security
     assert "rolbypassrls" in runtime_security
+    assert runtime_security.count("FROM pg_class c CROSS JOIN pg_roles r ") == 1
 
 
 def test_strict_mode_exposes_only_health_root_and_weave_routes():
@@ -138,6 +171,24 @@ def test_weave_ci_runs_every_fork_specific_postgres_gate():
     assert "ruff check --select E4,E7,E9,F --ignore F401 cognee" in workflow
 
 
+def test_parity_keeps_admin_only_test_cleanup_out_of_the_runtime_service():
+    parity = (ROOT / "scripts/weave-parity.sh").read_text()
+    backup = (ROOT / "scripts/weave-backup.sh").read_text()
+    restore = (ROOT / "scripts/weave-restore-drill.sh").read_text()
+    compose = (ROOT / "deployment/docker-compose.weave.yml").read_text()
+    assert "export WEAVE_STRICT_MODE=false" in parity
+    assert "export DB_USERNAME=cognee_admin" in parity
+    assert 'WEAVE_STRICT_MODE: "true"' in compose
+    assert "DB_USERNAME: cognee" in compose
+    assert "cross-organization schema deletion unexpectedly succeeded" in parity
+    assert "weave_drop_organization_dataset_schema" in parity
+    assert "pg_restore --username=cognee_admin" in restore
+    assert "--no-acl" not in backup
+    assert "--no-acl" not in restore
+    assert "--no-owner" not in backup
+    assert "--no-owner" not in restore
+
+
 def test_weekly_upstream_sync_opens_a_manual_review_pr_without_auto_merge():
     workflow = (ROOT / ".github/workflows/upstream-sync.yml").read_text()
     assert "schedule:" in workflow
@@ -163,6 +214,14 @@ def test_operations_and_parity_docs_keep_neo4j_out_of_the_runtime():
     assert "image: cognee-weave-parity:local" in compose
     assert "WEAVE_PARITY_SKIP_BUILD" in parity
     assert 'WEAVE_STRICT_MODE: "true"' in compose
+    dockerfile = (ROOT / "Dockerfile").read_text()
+    assert "install_enola()" in dockerfile
+    assert "AutoTokenizer.from_pretrained" in dockerfile
+    assert "TextEmbedding" in dockerfile
+    assert "weave image warmup" in dockerfile
+    assert "ENOLA_AUTO_INSTALL=false" in dockerfile
+    assert "ENOLA_PATH=/app/.cognee/bin/enola-0.3.13-linux-arm64" in dockerfile
+    assert "ENOLA_PATH: /app/.cognee/bin/enola-0.3.13-linux-arm64" in compose
     for prefix in ("VECTOR_DB", "GRAPH_DATABASE"):
         for suffix in ("HOST", "PORT", "USERNAME", "PASSWORD", "NAME"):
             assert f"{prefix}_{suffix}:" in compose

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 
 from cognee.context_global_variables import scoped_database_context_variables
 from cognee.infrastructure.databases.graph import get_graph_engine
@@ -280,6 +281,19 @@ async def _mark_organization_deleted(organization_id: UUID) -> None:
         await session.commit()
 
 
+async def _drop_bound_organization_schema(organization_id: UUID) -> None:
+    engine = get_relational_engine()
+    async with engine.get_async_session() as session:
+        await set_weave_organization_scope(session, organization_id)
+        await session.execute(
+            text(
+                "SELECT public.weave_drop_organization_dataset_schema(:organization_id)"
+            ),
+            {"organization_id": organization_id},
+        )
+        await session.commit()
+
+
 async def delete_organization(organization_id: UUID) -> DeleteResponse:
     async with weave_operation_lock(organization_id):
         binding, database = await _load_organization_for_delete(organization_id)
@@ -297,6 +311,9 @@ async def delete_organization(organization_id: UUID) -> DeleteResponse:
         # Graph and vector share one schema. Evict both adapter caches first,
         # then issue one idempotent DROP SCHEMA CASCADE.
         graph_engine_cache.evict_matching(graph_database_schema=binding.graph_schema)
-        await PGVectorSharedDatasetDatabaseHandler.delete_dataset(database)
+        if os.getenv("WEAVE_STRICT_MODE") == "true":
+            await _drop_bound_organization_schema(organization_id)
+        else:
+            await PGVectorSharedDatasetDatabaseHandler.delete_dataset(database)
         await _mark_organization_deleted(organization_id)
         return DeleteResponse(organization_id=organization_id)
