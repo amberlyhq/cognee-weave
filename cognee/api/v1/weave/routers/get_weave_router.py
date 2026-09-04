@@ -56,7 +56,11 @@ def get_weave_router() -> APIRouter:
         extraction_version: str = Form(..., min_length=1, max_length=64),
     ) -> IndexRepositoryResponse:
         from cognee.modules.weave.archive import persisted_upload
-        from cognee.modules.weave.indexing import IndexRequest, index_repository_archive
+        from cognee.modules.weave.indexing import (
+            IndexRequest,
+            RepositoryDeletedError,
+            index_repository_archive,
+        )
 
         try:
             if extraction_version != f"enola-{ENOLA_PINNED_VERSION}":
@@ -75,9 +79,26 @@ def get_weave_router() -> APIRouter:
                 job = await index_repository_archive(request, archive_path)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+        except RepositoryDeletedError as error:
+            raise HTTPException(status_code=409, detail="Repository is removed") from error
         except LookupError as error:
             raise HTTPException(status_code=404, detail="Organization not found") from error
         return IndexRepositoryResponse(job_id=job.id, status="accepted")
+
+    @router.post(
+        "/organizations/{organization_id}/repositories/{github_repository_id}/activate",
+        response_model=DeleteResponse,
+    )
+    async def activate_removed_repository(
+        organization_id: UUID,
+        github_repository_id: int,
+    ) -> DeleteResponse:
+        from cognee.modules.weave.deletion import SurfaceNotFound, activate_repository
+
+        try:
+            return await activate_repository(organization_id, github_repository_id)
+        except SurfaceNotFound as error:
+            raise HTTPException(status_code=404, detail="Resource not found") from error
 
     @router.post(
         "/organizations/{organization_id}/recall",

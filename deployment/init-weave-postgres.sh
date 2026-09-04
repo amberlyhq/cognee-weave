@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [ "${WEAVE_DB_PASSWORD}" = "${POSTGRES_PASSWORD}" ]; then
+  echo "runtime and admin database passwords must differ" >&2
+  exit 2
+fi
+
 psql --set ON_ERROR_STOP=1 --username "${POSTGRES_USER}" --dbname "${POSTGRES_DB}" \
   --set runtime_password="${WEAVE_DB_PASSWORD}" <<'SQL'
 SELECT format('CREATE ROLE cognee LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION', :'runtime_password')

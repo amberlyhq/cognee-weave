@@ -20,6 +20,10 @@ _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 _GITHUB_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
+class RepositoryDeletedError(RuntimeError):
+    """Indexing cannot implicitly reverse a verified repository removal."""
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -281,7 +285,8 @@ def _job_state(job: WeaveIndexJob, snapshot: WeaveRepositorySnapshot) -> IndexJo
 
 def _orm_job_is_current(job: WeaveIndexJob, snapshot: WeaveRepositorySnapshot) -> bool:
     return (
-        snapshot.requested_sha == job.requested_sha
+        snapshot.deleted_at is None
+        and snapshot.requested_sha == job.requested_sha
         and snapshot.pipeline_version == job.pipeline_version
         and snapshot.extraction_version == job.extraction_version
     )
@@ -308,6 +313,10 @@ class PostgresIndexStateStore:
                     WeaveRepositorySnapshot.github_repository_id == request.github_repository_id,
                 )
             )
+            if snapshot is not None and snapshot.deleted_at is not None:
+                raise RepositoryDeletedError(
+                    "Repository is removed; a verified installation event must reactivate it"
+                )
             job = await session.scalar(
                 select(WeaveIndexJob).where(
                     WeaveIndexJob.organization_id == request.organization_id,
@@ -320,11 +329,10 @@ class PostgresIndexStateStore:
             if job is not None:
                 if snapshot is None:
                     raise RuntimeError("Index job exists without repository snapshot")
-                restore_deleted = snapshot.deleted_at is not None
                 if (
                     job.status == "failed"
                     or (reclaim_running and job.status == "running")
-                    or restore_deleted
+                    or snapshot.status == "not_indexed"
                 ):
                     job.status = "queued"
                     job.error_code = None
@@ -339,7 +347,6 @@ class PostgresIndexStateStore:
                     snapshot.extraction_version = request.extraction_version
                     snapshot.status = "queued"
                     snapshot.error_code = None
-                    snapshot.deleted_at = None
                     await session.commit()
                 return _job_state(job, snapshot)
 
@@ -360,7 +367,6 @@ class PostgresIndexStateStore:
             snapshot.extraction_version = request.extraction_version
             snapshot.status = "queued"
             snapshot.error_code = None
-            snapshot.deleted_at = None
 
             job = WeaveIndexJob(
                 organization_id=request.organization_id,

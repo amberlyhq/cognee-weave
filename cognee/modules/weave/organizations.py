@@ -181,10 +181,26 @@ class CogneeOrganizationProvisioningBackend:
             existing = await lock_session.scalar(
                 select(WeaveOrganizationBinding).where(
                     WeaveOrganizationBinding.organization_id == organization_id,
-                    WeaveOrganizationBinding.deleted_at.is_(None),
                 )
             )
             if existing is not None:
+                if existing.deleted_at is None:
+                    return _binding_result(existing)
+                service_user = await lock_session.scalar(
+                    select(User).where(User.id == existing.service_user_id)
+                )
+                database = await lock_session.scalar(
+                    select(DatasetDatabase).where(
+                        DatasetDatabase.dataset_id == existing.primary_dataset_id,
+                        DatasetDatabase.owner_id == existing.service_user_id,
+                    )
+                )
+                if service_user is None or database is None:
+                    raise RuntimeError("Deleted Weave organization binding is incomplete")
+                self._validate_shared_database(database, existing.primary_dataset_id)
+                await self._recreate_shared_database(existing.primary_dataset_id, service_user)
+                existing.deleted_at = None
+                await lock_session.commit()
                 return _binding_result(existing)
 
             user = await self._service_user(organization_id)
@@ -215,6 +231,26 @@ class CogneeOrganizationProvisioningBackend:
             lock_session.add(record)
             await lock_session.commit()
             return _binding_result(record)
+
+    @staticmethod
+    async def _recreate_shared_database(dataset_id: UUID, service_user: User) -> None:
+        from cognee.infrastructure.databases.graph.postgres_demo.PostgresGraphSharedDatasetDatabaseHandler import (
+            PostgresGraphSharedDatasetDatabaseHandler,
+        )
+        from cognee.infrastructure.databases.vector.pgvector.PGVectorSharedDatasetDatabaseHandler import (
+            PGVectorSharedDatasetDatabaseHandler,
+        )
+
+        graph = await PostgresGraphSharedDatasetDatabaseHandler.create_dataset(
+            dataset_id, service_user
+        )
+        vector = await PGVectorSharedDatasetDatabaseHandler.create_dataset(dataset_id, service_user)
+        expected = dataset_schema_name(dataset_id)
+        if (
+            graph["graph_database_connection_info"]["graph_database_schema"] != expected
+            or vector["vector_database_connection_info"]["schema"] != expected
+        ):
+            raise RuntimeError("Recreated Weave database did not preserve its dataset schema")
 
     @staticmethod
     def _validate_shared_database(database: DatasetDatabase, dataset_id: UUID) -> None:

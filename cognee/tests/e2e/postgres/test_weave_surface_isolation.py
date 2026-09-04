@@ -76,6 +76,7 @@ async def test_every_surface_stays_scoped_through_repository_and_organization_de
     from cognee.modules.weave.contracts import RecallRequest
     from cognee.modules.weave.deletion import (
         SurfaceNotFound,
+        activate_repository,
         delete_organization,
         delete_repository,
         export_organization,
@@ -143,9 +144,17 @@ async def test_every_surface_stays_scoped_through_repository_and_organization_de
         assert await graph.get_node(deleted_repository_node) is None
         assert await vector.retrieve("CodeRepository_name", [deleted_repository_node]) == []
 
-    # A fresh verified update can restore a previously deleted repository,
-    # without changing the other organization's same-process context.
+    # Index delivery alone cannot revive a removed repository. Only the
+    # separately verified GitHub installation lifecycle may reactivate it.
     alpha_request, alpha_marker = inputs[0]
+    from cognee.modules.weave.indexing import RepositoryDeletedError
+
+    with pytest.raises(RepositoryDeletedError):
+        await index_repository_archive(
+            alpha_request,
+            _archive(tmp_path, alpha_request.repository_name, alpha_marker),
+        )
+    await activate_repository(organization_a, alpha_request.github_repository_id)
     await index_repository_archive(
         alpha_request,
         _archive(tmp_path, alpha_request.repository_name, alpha_marker),
@@ -195,3 +204,14 @@ async def test_every_surface_stays_scoped_through_repository_and_organization_de
             {"schema": binding_a.graph_schema},
         )
     assert schema_exists is False
+
+    # Re-provisioning a previously deleted organization reuses its immutable
+    # binding and recreates the dropped shared dataset schema.
+    reprovisioned_a = await provision_organization(organization_a)
+    assert reprovisioned_a.dataset_id == binding_a.dataset_id
+    async with engine.get_async_session() as session:
+        recreated_schema_exists = await session.scalar(
+            text("SELECT to_regnamespace(:schema) IS NOT NULL"),
+            {"schema": binding_a.graph_schema},
+        )
+    assert recreated_schema_exists is True

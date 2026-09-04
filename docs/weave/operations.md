@@ -29,6 +29,10 @@ Use two Postgres users against the same private database:
   bootstrap. It must be `NOSUPERUSER`, `NOCREATEDB`, `NOCREATEROLE`,
   `NOREPLICATION`, must not bypass row security, and must not own the database.
 
+Give the owner and runtime roles different generated passwords. In the local
+Compose contract these are `WEAVE_ADMIN_DB_PASSWORD` and `WEAVE_DB_PASSWORD`;
+knowing the API password must never permit logging in as `cognee_admin`.
+
 Set the API's matching `DB_*`, `VECTOR_DB_*`, and `GRAPH_DATABASE_*` username
 and password values to that runtime user. All three providers use the same host,
 port, and database. Strict mode rejects an owner/admin runtime credential or any
@@ -71,7 +75,8 @@ those running-service values are read back.
   custom-format PostgreSQL backup and refuses to overwrite a file.
 - `scripts/weave-restore-drill.sh /absolute/backup.dump` restores only into a
   fresh project whose name starts with `cognee-weave-restore-`. It rejects the
-  source project name and runs canary export/provenance checks.
+  source project name, refuses a name already owning Compose resources, and
+  runs canary export/provenance checks.
 - Repository archives are temporary and deleted after indexing. Derived graph
   and vector data remains rebuildable from GitHub at the recorded SHA.
 - Rotate `WEAVE_INTERNAL_TOKEN` in Weave and Amberly together. During mismatch,

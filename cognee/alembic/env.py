@@ -97,8 +97,9 @@ db_engine = get_relational_engine()
 # names the s3:// path, which aiosqlite cannot open). The live engine's URL
 # always points at the real connection target on every backend.
 db_uri = db_engine.engine.url.render_as_string(hide_password=False)
+safe_db_uri = db_engine.engine.url.render_as_string(hide_password=True)
 
-logging.getLogger("alembic.env").info("Using database: %s", db_uri)
+logging.getLogger("alembic.env").info("Using database: %s", safe_db_uri)
 
 config.set_section_option(
     config.config_ini_section,

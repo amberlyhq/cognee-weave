@@ -168,6 +168,42 @@ async def _mark_repository_deleted(
         await session.commit()
 
 
+async def activate_repository(
+    organization_id: UUID,
+    github_repository_id: int,
+) -> DeleteResponse:
+    """Reactivate a tombstone only through the verified repository lifecycle API."""
+
+    async with weave_operation_lock(organization_id, github_repository_id):
+        binding = await get_organization_binding(organization_id)
+        if binding is None or github_repository_id <= 0:
+            raise SurfaceNotFound()
+        engine = get_relational_engine()
+        async with engine.get_async_session() as session:
+            await set_weave_organization_scope(session, organization_id)
+            snapshot = await session.scalar(
+                select(WeaveRepositorySnapshot)
+                .where(
+                    WeaveRepositorySnapshot.organization_id == organization_id,
+                    WeaveRepositorySnapshot.github_repository_id == github_repository_id,
+                )
+                .with_for_update()
+            )
+            if snapshot is not None and snapshot.deleted_at is not None:
+                snapshot.deleted_at = None
+                snapshot.requested_sha = None
+                snapshot.indexed_sha = None
+                snapshot.pipeline_version = None
+                snapshot.extraction_version = None
+                snapshot.status = "not_indexed"
+                snapshot.error_code = None
+                await session.commit()
+    return DeleteResponse(
+        organization_id=organization_id,
+        github_repository_id=github_repository_id,
+    )
+
+
 async def delete_repository(
     organization_id: UUID,
     github_repository_id: int,
@@ -304,6 +340,7 @@ async def delete_organization(organization_id: UUID) -> DeleteResponse:
             invalidate_code_graph_snapshot_cache(dataset_id=binding.dataset_id)
 
         from cognee.infrastructure.databases.graph.get_graph_engine import graph_engine_cache
+        from cognee.infrastructure.databases.vector.create_vector_engine import vector_engine_cache
         from cognee.infrastructure.databases.vector.pgvector.PGVectorSharedDatasetDatabaseHandler import (
             PGVectorSharedDatasetDatabaseHandler,
         )
@@ -311,6 +348,7 @@ async def delete_organization(organization_id: UUID) -> DeleteResponse:
         # Graph and vector share one schema. Evict both adapter caches first,
         # then issue one idempotent DROP SCHEMA CASCADE.
         graph_engine_cache.evict_matching(graph_database_schema=binding.graph_schema)
+        vector_engine_cache.evict_matching(vector_db_schema=binding.vector_schema)
         if os.getenv("WEAVE_STRICT_MODE") == "true":
             await _drop_bound_organization_schema(organization_id)
         else:

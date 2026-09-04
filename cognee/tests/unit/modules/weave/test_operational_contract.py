@@ -118,11 +118,16 @@ def test_rls_covers_every_shared_control_plane_table_on_fresh_and_existing_datab
     assert "current_database()" in forward_migration
     assert "op.get_context().autocommit_block()" in forward_migration
     assert "POSTGRES_USER: cognee_admin" in compose
+    assert "POSTGRES_PASSWORD: ${WEAVE_ADMIN_DB_PASSWORD" in compose
+    assert "DB_PASSWORD: ${WEAVE_ADMIN_DB_PASSWORD" in compose
     assert "DB_USERNAME: cognee" in compose
+    assert "DB_PASSWORD: ${WEAVE_DB_PASSWORD" in compose
     assert 'ENABLE_AUTO_MIGRATIONS: "false"' in compose
     assert "service_completed_successfully" in compose
     assert "init-weave-postgres.sh" in compose
     assert "ALTER DATABASE cognee_db OWNER TO cognee" not in init
+    assert '"${WEAVE_DB_PASSWORD}" = "${POSTGRES_PASSWORD}"' in init
+    assert "runtime and admin database passwords must differ" in init
     assert "weave_create_dataset_schema" in init
     assert "weave_create_dataset_schema" in postgres_admin
     assert "weave_drop_organization_dataset_schema" in init
@@ -178,11 +183,14 @@ def test_parity_keeps_admin_only_test_cleanup_out_of_the_runtime_service():
     compose = (ROOT / "deployment/docker-compose.weave.yml").read_text()
     assert "export WEAVE_STRICT_MODE=false" in parity
     assert "export DB_USERNAME=cognee_admin" in parity
+    assert 'export WEAVE_ADMIN_DB_PASSWORD="${WEAVE_ADMIN_DB_PASSWORD:-$(openssl rand -hex 24)}"' in parity
+    assert 'DB_PASSWORD="$WEAVE_ADMIN_DB_PASSWORD"' in parity
     assert 'WEAVE_STRICT_MODE: "true"' in compose
     assert "DB_USERNAME: cognee" in compose
     assert "cross-organization schema deletion unexpectedly succeeded" in parity
     assert "weave_drop_organization_dataset_schema" in parity
     assert "pg_restore --username=cognee_admin" in restore
+    assert 'WEAVE_ADMIN_DB_PASSWORD="${RESTORE_ADMIN_DB_PASSWORD' in restore
     assert "--no-acl" not in backup
     assert "--no-acl" not in restore
     assert "--no-owner" not in backup
@@ -254,3 +262,24 @@ def test_parity_backup_and_restore_scripts_are_fail_closed():
     assert "RESTORE_ORGANIZATION_ID" in restore
     assert "RESTORE_EXPECTED_EXPORT" in restore
     assert "restored export does not match the backup source" in restore
+    assert "for resource in container volume network" in restore
+    assert 'com.docker.compose.project="$restore_project"' in restore
+    assert "restore project already owns Docker resources" in restore
+    assert restore.index("restore project already owns Docker resources") < restore.index("trap cleanup EXIT")
+    assert "logs --no-color --tail=200" in restore
+
+
+def test_strict_organization_deletion_evicts_both_shared_adapter_caches():
+    deletion = (ROOT / "cognee/modules/weave/deletion.py").read_text()
+    strict_branch = deletion[deletion.index("async def delete_organization") :]
+    assert "graph_engine_cache.evict_matching" in strict_branch
+    assert "vector_engine_cache.evict_matching" in strict_branch
+    assert strict_branch.index("vector_engine_cache.evict_matching") < strict_branch.index(
+        'os.getenv("WEAVE_STRICT_MODE") == "true"'
+    )
+
+
+def test_migration_logs_never_render_database_passwords():
+    alembic_environment = (ROOT / "cognee/alembic/env.py").read_text()
+    assert "safe_db_uri = db_engine.engine.url.render_as_string(hide_password=True)" in alembic_environment
+    assert 'info("Using database: %s", safe_db_uri)' in alembic_environment

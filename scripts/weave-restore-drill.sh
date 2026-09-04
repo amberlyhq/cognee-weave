@@ -29,15 +29,29 @@ if [[ ! "$restore_project" =~ ^cognee-weave-restore-[a-zA-Z0-9._-]+$ ]] || [ "$r
   exit 2
 fi
 
+export WEAVE_ADMIN_DB_PASSWORD="${RESTORE_ADMIN_DB_PASSWORD:-$(openssl rand -hex 24)}"
 export WEAVE_DB_PASSWORD="${RESTORE_DB_PASSWORD:-$(openssl rand -hex 24)}"
 export WEAVE_INTERNAL_TOKEN="${RESTORE_INTERNAL_TOKEN:-$(openssl rand -hex 32)}"
 export WEAVE_POSTGRES_PORT="${RESTORE_POSTGRES_PORT:-15433}"
 export WEAVE_HTTP_PORT="${RESTORE_HTTP_PORT:-18001}"
 
+for resource in container volume network; do
+  if [ -n "$(docker "${resource}" ls -q --filter label=com.docker.compose.project="$restore_project")" ]; then
+    echo "restore project already owns Docker resources: ${restore_project}" >&2
+    exit 2
+  fi
+done
+
 cleanup() {
+  status=$?
+  trap - EXIT
+  if [ "$status" -ne 0 ]; then
+    docker compose -p "$restore_project" -f "$compose_file" logs --no-color --tail=200 >&2 || true
+  fi
   if [ "${KEEP_WEAVE_RESTORE:-false}" != "true" ]; then
     docker compose -p "$restore_project" -f "$compose_file" down --volumes --remove-orphans >/dev/null 2>&1 || true
   fi
+  exit "$status"
 }
 trap cleanup EXIT
 

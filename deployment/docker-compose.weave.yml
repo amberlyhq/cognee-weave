@@ -5,7 +5,7 @@ services:
     image: pgvector/pgvector:0.8.6-pg17-bookworm
     environment:
       POSTGRES_USER: cognee_admin
-      POSTGRES_PASSWORD: ${WEAVE_DB_PASSWORD:?WEAVE_DB_PASSWORD is required}
+      POSTGRES_PASSWORD: ${WEAVE_ADMIN_DB_PASSWORD:?WEAVE_ADMIN_DB_PASSWORD is required}
       POSTGRES_DB: cognee_db
       WEAVE_DB_PASSWORD: ${WEAVE_DB_PASSWORD:?WEAVE_DB_PASSWORD is required}
     ports:
@@ -29,21 +29,21 @@ services:
       DB_HOST: postgres
       DB_PORT: "5432"
       DB_USERNAME: cognee_admin
-      DB_PASSWORD: ${WEAVE_DB_PASSWORD:?WEAVE_DB_PASSWORD is required}
+      DB_PASSWORD: ${WEAVE_ADMIN_DB_PASSWORD:?WEAVE_ADMIN_DB_PASSWORD is required}
       DB_NAME: cognee_db
       VECTOR_DB_PROVIDER: pgvector
       VECTOR_DATASET_DATABASE_HANDLER: pgvector_shared
       VECTOR_DB_HOST: postgres
       VECTOR_DB_PORT: "5432"
       VECTOR_DB_USERNAME: cognee_admin
-      VECTOR_DB_PASSWORD: ${WEAVE_DB_PASSWORD:?WEAVE_DB_PASSWORD is required}
+      VECTOR_DB_PASSWORD: ${WEAVE_ADMIN_DB_PASSWORD:?WEAVE_ADMIN_DB_PASSWORD is required}
       VECTOR_DB_NAME: cognee_db
       GRAPH_DATABASE_PROVIDER: postgres_demo
       GRAPH_DATASET_DATABASE_HANDLER: postgres_graph_shared
       GRAPH_DATABASE_HOST: postgres
       GRAPH_DATABASE_PORT: "5432"
       GRAPH_DATABASE_USERNAME: cognee_admin
-      GRAPH_DATABASE_PASSWORD: ${WEAVE_DB_PASSWORD:?WEAVE_DB_PASSWORD is required}
+      GRAPH_DATABASE_PASSWORD: ${WEAVE_ADMIN_DB_PASSWORD:?WEAVE_ADMIN_DB_PASSWORD is required}
       GRAPH_DATABASE_NAME: cognee_db
       COGNEE_SKIP_CONNECTION_TEST: "true"
     depends_on:
