@@ -151,6 +151,14 @@ async def create_pg_schema_if_not_exists(
     )
     try:
         async with engine.begin() as connection:
+            if os.getenv("WEAVE_STRICT_MODE") == "true":
+                await connection.execute(
+                    text(
+                        "SELECT public.weave_create_dataset_schema(:schema_name, :include_vector)"
+                    ),
+                    {"schema_name": schema, "include_vector": with_vector_extension},
+                )
+                return
             if with_vector_extension:
                 await connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
             await connection.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema}";'))

@@ -17,7 +17,6 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 _RLS_TABLES = (
-    "weave_organization_bindings",
     "weave_repository_snapshots",
     "weave_index_jobs",
 )

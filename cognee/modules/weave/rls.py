@@ -12,6 +12,50 @@ _ORGANIZATION_PREDICATE = (
     "organization_id = NULLIF(current_setting('app.weave_organization_id', true), '')::uuid"
 )
 
+_CREATE_SCHEMA_FUNCTION = """
+CREATE OR REPLACE FUNCTION public.weave_create_dataset_schema(
+    schema_name text,
+    include_vector boolean DEFAULT false
+) RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
+AS $function$
+BEGIN
+    IF schema_name !~ '^ds_[0-9a-f]{32}$' THEN
+        RAISE EXCEPTION 'Invalid Weave dataset schema';
+    END IF;
+    IF include_vector AND NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_extension WHERE extname = 'vector'
+    ) THEN
+        RAISE EXCEPTION 'The vector extension is not installed';
+    END IF;
+    EXECUTE format(
+        'CREATE SCHEMA IF NOT EXISTS %I AUTHORIZATION %I', schema_name, current_user
+    );
+    IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'cognee') THEN
+        EXECUTE format('GRANT USAGE, CREATE ON SCHEMA %I TO cognee', schema_name);
+    END IF;
+END;
+$function$
+"""
+
+_RUNTIME_GRANTS = """
+DO $grant$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'cognee') THEN
+        GRANT EXECUTE ON FUNCTION public.weave_create_dataset_schema(text, boolean) TO cognee;
+        GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO cognee;
+        GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO cognee;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO cognee;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            GRANT USAGE, SELECT ON SEQUENCES TO cognee;
+    END IF;
+END
+$grant$
+"""
+
 
 async def ensure_weave_rls_policies() -> None:
     """Install policies create_all cannot express on a fresh Postgres database."""
@@ -25,8 +69,7 @@ async def ensure_weave_rls_policies() -> None:
             await session.execute(text(f'ALTER TABLE "{table_name}" FORCE ROW LEVEL SECURITY'))
             await session.execute(
                 text(
-                    f'DROP POLICY IF EXISTS "{table_name}_organization_isolation" '
-                    f'ON "{table_name}"'
+                    f'DROP POLICY IF EXISTS "{table_name}_organization_isolation" ON "{table_name}"'
                 )
             )
             await session.execute(
@@ -35,6 +78,14 @@ async def ensure_weave_rls_policies() -> None:
                     f"USING ({_ORGANIZATION_PREDICATE}) WITH CHECK ({_ORGANIZATION_PREDICATE})"
                 )
             )
+        await session.execute(text(_CREATE_SCHEMA_FUNCTION))
+        await session.execute(
+            text(
+                "REVOKE ALL ON FUNCTION "
+                "public.weave_create_dataset_schema(text, boolean) FROM PUBLIC"
+            )
+        )
+        await session.execute(text(_RUNTIME_GRANTS))
         await session.commit()
 
 
@@ -43,16 +94,36 @@ async def assert_weave_runtime_database_security() -> None:
 
     engine = get_relational_engine()
     async with engine.get_async_session() as session:
-        is_superuser = await session.scalar(
-            text("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
+        role = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls "
+                        "FROM pg_roles WHERE rolname = current_user"
+                    )
+                )
+            )
+            .mappings()
+            .one()
         )
-        if is_superuser:
-            raise RuntimeError("Strict Weave runtime database role must not be a superuser")
+        if any(role.values()):
+            raise RuntimeError("Strict Weave runtime database role has administrative privileges")
+        owns_database = await session.scalar(
+            text(
+                "SELECT d.datdba = r.oid FROM pg_database d "
+                "JOIN pg_roles r ON r.rolname = current_user "
+                "WHERE d.datname = current_database()"
+            )
+        )
+        if owns_database:
+            raise RuntimeError("Strict Weave runtime database role must not own the database")
         result = await session.execute(
             text(
-                "SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity, "
+                "SELECT c.relname, c.relowner, r.oid AS runtime_oid, "
+                "c.relrowsecurity, c.relforcerowsecurity, "
                 "EXISTS (SELECT 1 FROM pg_policies p WHERE p.tablename = c.relname) AS has_policy "
-                "FROM pg_class c WHERE c.relname = ANY(:tables)"
+                "FROM pg_class c CROSS JOIN pg_roles r "
+                "WHERE r.rolname = current_user AND c.relname = ANY(:tables)"
             ),
             {"tables": list(RLS_TABLES)},
         )
@@ -61,6 +132,7 @@ async def assert_weave_runtime_database_security() -> None:
             table
             for table in RLS_TABLES
             if table not in state
+            or state[table].relowner == state[table].runtime_oid
             or not state[table].relrowsecurity
             or not state[table].relforcerowsecurity
             or not state[table].has_policy

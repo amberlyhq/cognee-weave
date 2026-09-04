@@ -70,16 +70,38 @@ def test_fresh_database_registers_weave_models_before_create_all():
     assert startup.index(fresh_create) < startup.index("await ensure_weave_rls_policies()")
 
 
-def test_rls_covers_every_shared_control_plane_table_and_runtime_is_not_superuser():
-    migration = (
+def test_rls_covers_every_shared_control_plane_table_on_fresh_and_existing_databases():
+    original_migration = (
         ROOT / "cognee/alembic/versions/d1e3f5a7b9c2_add_weave_organization_control_plane.py"
     ).read_text()
+    forward_migration_path = (
+        ROOT / "cognee/alembic/versions/f3a5c7e9b1d4_secure_weave_runtime_role.py"
+    )
+    assert forward_migration_path.exists()
+    forward_migration = forward_migration_path.read_text()
+    runtime_security = (ROOT / "cognee/modules/weave/rls.py").read_text()
+    postgres_admin = (ROOT / "cognee/infrastructure/databases/postgres/admin.py").read_text()
     compose = (ROOT / "deployment/docker-compose.weave.yml").read_text()
-    assert '"weave_organization_bindings"' in migration
+    init = (ROOT / "deployment/init-weave-postgres.sh").read_text()
+
+    assert '"weave_organization_bindings"' not in original_migration.partition("def upgrade")[0]
+    assert 'down_revision: Union[str, None] = "e2f4a6b8c0d3"' in forward_migration
+    assert 'table_name = "weave_organization_bindings"' in forward_migration
+    assert "ENABLE ROW LEVEL SECURITY" in forward_migration
+    assert "FORCE ROW LEVEL SECURITY" in forward_migration
+    assert "weave_organization_bindings_organization_isolation" in forward_migration
     assert "POSTGRES_USER: cognee_admin" in compose
     assert "DB_USERNAME: cognee" in compose
+    assert 'ENABLE_AUTO_MIGRATIONS: "false"' in compose
+    assert "service_completed_successfully" in compose
     assert "init-weave-postgres.sh" in compose
-    assert (ROOT / "deployment/init-weave-postgres.sh").exists()
+    assert "ALTER DATABASE cognee_db OWNER TO cognee" not in init
+    assert "weave_create_dataset_schema" in init
+    assert "weave_create_dataset_schema" in postgres_admin
+    assert 'os.getenv("WEAVE_STRICT_MODE") == "true"' in postgres_admin
+    assert "datdba" in runtime_security
+    assert "relowner" in runtime_security
+    assert "rolbypassrls" in runtime_security
 
 
 def test_strict_mode_exposes_only_health_root_and_weave_routes():
@@ -91,7 +113,7 @@ def test_strict_mode_exposes_only_health_root_and_weave_routes():
 def test_weave_index_api_pins_the_actual_extractor_version():
     router = (ROOT / "cognee/api/v1/weave/routers/get_weave_router.py").read_text()
     assert "ENOLA_PINNED_VERSION" in router
-    assert "extraction_version != f\"enola-{ENOLA_PINNED_VERSION}\"" in router
+    assert 'extraction_version != f"enola-{ENOLA_PINNED_VERSION}"' in router
 
 
 def test_weave_ci_runs_every_fork_specific_postgres_gate():
@@ -137,7 +159,7 @@ def test_operations_and_parity_docs_keep_neo4j_out_of_the_runtime():
     assert "pgvector/pgvector:0.8.6-pg17-bookworm" in compose
     assert "image: cognee-weave-parity:local" in compose
     assert "WEAVE_PARITY_SKIP_BUILD" in parity
-    assert "WEAVE_STRICT_MODE: \"true\"" in compose
+    assert 'WEAVE_STRICT_MODE: "true"' in compose
     for prefix in ("VECTOR_DB", "GRAPH_DATABASE"):
         for suffix in ("HOST", "PORT", "USERNAME", "PASSWORD", "NAME"):
             assert f"{prefix}_{suffix}:" in compose
@@ -158,8 +180,8 @@ def test_parity_backup_and_restore_scripts_are_fail_closed():
     assert "logs --no-color" in parity
     assert 'organization_a="7e1a7b9d-08c2-4f57-9884-623e01b68b01"' in parity
     assert 'organization_b="7e1a7b9d-08c2-4f57-9884-623e01b68b02"' in parity
-    assert 'go.mod' in parity
-    assert 'func %s() string' in parity
+    assert "go.mod" in parity
+    assert "func %s() string" in parity
     postgres_conftest = (ROOT / "cognee/tests/e2e/postgres/conftest.py").read_text()
     assert '@pytest.fixture(scope="session")' in postgres_conftest
     assert "asyncio.new_event_loop()" in postgres_conftest

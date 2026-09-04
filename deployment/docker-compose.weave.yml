@@ -19,6 +19,37 @@ services:
       - weave-postgres:/var/lib/postgresql/data
       - ./init-weave-postgres.sh:/docker-entrypoint-initdb.d/10-init-weave-postgres.sh:ro
 
+  migrate:
+    image: cognee-weave-parity:local
+    entrypoint: ["/app/.venv/bin/cognee-cli", "upgrade", "head"]
+    environment:
+      ENV: prod
+      ENABLE_AUTO_MIGRATIONS: "true"
+      DB_PROVIDER: postgres
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USERNAME: cognee_admin
+      DB_PASSWORD: ${WEAVE_DB_PASSWORD:?WEAVE_DB_PASSWORD is required}
+      DB_NAME: cognee_db
+      VECTOR_DB_PROVIDER: pgvector
+      VECTOR_DATASET_DATABASE_HANDLER: pgvector_shared
+      VECTOR_DB_HOST: postgres
+      VECTOR_DB_PORT: "5432"
+      VECTOR_DB_USERNAME: cognee_admin
+      VECTOR_DB_PASSWORD: ${WEAVE_DB_PASSWORD:?WEAVE_DB_PASSWORD is required}
+      VECTOR_DB_NAME: cognee_db
+      GRAPH_DATABASE_PROVIDER: postgres_demo
+      GRAPH_DATASET_DATABASE_HANDLER: postgres_graph_shared
+      GRAPH_DATABASE_HOST: postgres
+      GRAPH_DATABASE_PORT: "5432"
+      GRAPH_DATABASE_USERNAME: cognee_admin
+      GRAPH_DATABASE_PASSWORD: ${WEAVE_DB_PASSWORD:?WEAVE_DB_PASSWORD is required}
+      GRAPH_DATABASE_NAME: cognee_db
+      COGNEE_SKIP_CONNECTION_TEST: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   weave:
     image: cognee-weave-parity:local
     build:
@@ -28,6 +59,7 @@ services:
       ENV: prod
       HTTP_PORT: "8000"
       WEAVE_STRICT_MODE: "true"
+      ENABLE_AUTO_MIGRATIONS: "false"
       WEAVE_INTERNAL_TOKEN: ${WEAVE_INTERNAL_TOKEN:?WEAVE_INTERNAL_TOKEN is required}
       ENABLE_BACKEND_ACCESS_CONTROL: "true"
       DB_PROVIDER: postgres
@@ -57,6 +89,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     ports:
       - "127.0.0.1:${WEAVE_HTTP_PORT:-18000}:8000"
     healthcheck:
