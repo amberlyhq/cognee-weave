@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import case, select
 
 from cognee.context_global_variables import scoped_database_context_variables
 from cognee.infrastructure.databases.graph import get_graph_engine
@@ -84,6 +84,7 @@ async def recall(organization_id: UUID, request: RecallRequest) -> RecallRespons
 async def _load_snapshots(
     organization_id: UUID,
     repository_ids: list[int],
+    primary_repository_id: int | None,
 ) -> list[WeaveRepositorySnapshot]:
     engine = get_relational_engine()
     async with engine.get_async_session() as session:
@@ -95,8 +96,18 @@ async def _load_snapshots(
         )
         if repository_ids:
             query = query.where(WeaveRepositorySnapshot.github_repository_id.in_(repository_ids))
+        priority = (
+            (
+                case(
+                    (WeaveRepositorySnapshot.github_repository_id == primary_repository_id, 0),
+                    else_=1,
+                ),
+            )
+            if primary_repository_id is not None
+            else ()
+        )
         records = await session.scalars(
-            query.order_by(WeaveRepositorySnapshot.github_repository_id).limit(20)
+            query.order_by(*priority, WeaveRepositorySnapshot.github_repository_id).limit(20)
         )
         return list(records)
 
@@ -341,7 +352,11 @@ async def _recall_scoped(
     binding: OrganizationBinding,
     request: RecallRequest,
 ) -> RecallResponse:
-    records = await _load_snapshots(organization_id, request.github_repository_ids)
+    records = await _load_snapshots(
+        organization_id,
+        request.github_repository_ids,
+        request.primary_github_repository_id,
+    )
     if not records:
         return _unavailable(
             organization_id,
@@ -375,6 +390,8 @@ async def _recall_scoped(
     )
     if request.github_repository_ids:
         stale = stale or set(request.github_repository_ids) != set(snapshots)
+    if request.primary_github_repository_id is not None:
+        stale = stale or request.primary_github_repository_id not in snapshots
     ages = [item.age_seconds for item in repositories if item.age_seconds is not None]
     indexed_shas = {item.indexed_default_sha for item in repositories}
     indexed_sha = next(iter(indexed_shas)) if len(indexed_shas) == 1 else None

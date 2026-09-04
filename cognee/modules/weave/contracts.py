@@ -16,6 +16,7 @@ class RecallRequest(BaseModel):
     mode: RecallMode = "repository_context"
     query: str = Field(min_length=1, max_length=2000)
     github_repository_ids: list[int] = Field(default_factory=list, max_length=20)
+    primary_github_repository_id: Optional[int] = Field(default=None, ge=1, le=2**63 - 1)
     seeds: list[str] = Field(default_factory=list, max_length=10)
     top_k: int = Field(default=10, ge=1, le=25)
     depth: int = Field(default=1, ge=0, le=4)

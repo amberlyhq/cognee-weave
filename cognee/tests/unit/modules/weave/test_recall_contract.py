@@ -12,6 +12,7 @@ def test_recall_request_is_allow_listed_and_bounded():
         mode="repository_context",
         query="Message",
         github_repository_ids=[920001, 920002],
+        primary_github_repository_id=920002,
         seeds=["symbol:Message"],
         top_k=25,
         depth=4,
@@ -21,10 +22,12 @@ def test_recall_request_is_allow_listed_and_bounded():
     assert request.top_k == 25
     assert request.depth == 4
     assert request.github_repository_ids == [920001, 920002]
+    assert request.primary_github_repository_id == 920002
     assert set(RecallRequest.model_json_schema()["properties"]) == {
         "mode",
         "query",
         "github_repository_ids",
+        "primary_github_repository_id",
         "seeds",
         "top_k",
         "depth",
@@ -37,6 +40,7 @@ def test_recall_request_is_allow_listed_and_bounded():
         {"mode": "repository_context", "query": "Message", "schema": "public"},
         {"mode": "repository_context", "query": "Message", "top_k": 26},
         {"mode": "repository_context", "query": "Message", "depth": 5},
+        {"mode": "repository_context", "query": "Message", "primary_github_repository_id": 0},
         {"mode": "repository_context", "query": "Message", "deadline_ms": 15001},
     )
     for payload in rejected:
@@ -132,9 +136,11 @@ async def test_cross_repository_snapshot_lookup_is_bounded(monkeypatch):
     await recall_module._load_snapshots(
         UUID("7e1a7b9d-08c2-4f57-9884-623e01b68a01"),
         [],
+        920021,
     )
 
     assert captured["query"]._limit_clause.value == 20
+    assert "CASE WHEN" in str(captured["query"])
 
 
 @pytest.mark.parametrize("status", ["available", "stale", "unavailable", "timed_out"])
