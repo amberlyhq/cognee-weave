@@ -188,6 +188,9 @@ def test_parity_keeps_admin_only_test_cleanup_out_of_the_runtime_service():
     assert 'WEAVE_STRICT_MODE: "true"' in compose
     assert "DB_USERNAME: cognee" in compose
     assert "cross-organization schema deletion unexpectedly succeeded" in parity
+    assert "removed repository indexing did not return 409" in parity
+    assert "/activate" in parity
+    assert "runtime_lifecycle" in parity
     assert "weave_drop_organization_dataset_schema" in parity
     assert "pg_restore --username=cognee_admin" in restore
     assert 'WEAVE_ADMIN_DB_PASSWORD="${RESTORE_ADMIN_DB_PASSWORD' in restore

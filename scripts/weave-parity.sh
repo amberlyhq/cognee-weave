@@ -105,6 +105,27 @@ if [ "$fixture_index_seconds_b" -gt 300 ]; then
   echo "beta fixture indexing exceeded the 5-minute gate" >&2
   exit 1
 fi
+
+curl -fsS -X DELETE -H "Authorization: Bearer ${WEAVE_INTERNAL_TOKEN}" \
+  "$base_url/api/v1/weave/organizations/${organization_a}/repositories/${repository_a}" >/dev/null
+removed_index_status="$(curl -sS -o "$temporary/removed-index.json" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer ${WEAVE_INTERNAL_TOKEN}" \
+  -F "archive=@${temporary}/alpha.tar.gz;type=application/gzip" \
+  -F "github_repository_id=${repository_a}" \
+  -F "repository_owner=amberlyhq" \
+  -F "repository_name=weave-alpha" \
+  -F "default_branch=main" \
+  -F "requested_sha=${sha_a}" \
+  -F "pipeline_version=weave-code.v1" \
+  -F "extraction_version=enola-0.3.13" \
+  "$base_url/api/v1/weave/organizations/${organization_a}/repositories/index")"
+if [ "$removed_index_status" != "409" ]; then
+  echo "removed repository indexing did not return 409" >&2
+  exit 1
+fi
+curl -fsS -X POST -H "Authorization: Bearer ${WEAVE_INTERNAL_TOKEN}" \
+  "$base_url/api/v1/weave/organizations/${organization_a}/repositories/${repository_a}/activate" >/dev/null
+index_fixture "$organization_a" "$repository_a" "weave-alpha" "$sha_a" "$temporary/alpha.tar.gz"
 export WEAVE_STRICT_MODE=false
 export DB_PROVIDER=postgres DB_HOST=127.0.0.1 DB_PORT="$WEAVE_POSTGRES_PORT"
 export DB_USERNAME=cognee_admin DB_PASSWORD="$WEAVE_ADMIN_DB_PASSWORD" DB_NAME=cognee_db
@@ -167,6 +188,10 @@ fi
 
 curl -fsS -X DELETE -H "Authorization: Bearer ${WEAVE_INTERNAL_TOKEN}" \
   "$base_url/api/v1/weave/organizations/${organization_a}" >/dev/null
+curl -fsS -X POST -H "Authorization: Bearer ${WEAVE_INTERNAL_TOKEN}" \
+  "$base_url/api/v1/weave/organizations/${organization_a}/provision" >/dev/null
+curl -fsS -X DELETE -H "Authorization: Bearer ${WEAVE_INTERNAL_TOKEN}" \
+  "$base_url/api/v1/weave/organizations/${organization_a}" >/dev/null
 
 export_response="$(curl -fsS -H "Authorization: Bearer ${WEAVE_INTERNAL_TOKEN}" \
   "$base_url/api/v1/weave/organizations/${organization_b}/export?repository_id=${repository_b}")"
@@ -223,6 +248,7 @@ receipt = {
     "query_plan": "passed by test_pgvector_hnsw_plan.py",
     "cross_organization_leaks": 0,
     "backup_restore": "passed",
+    "runtime_lifecycle": "passed",
 }
 pathlib.Path(sys.argv[2]).write_text(json.dumps(receipt, indent=2) + "\n")
 if receipt["recall_seconds"]["p95"] >= 5:
