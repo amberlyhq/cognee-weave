@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import deque
 from datetime import datetime, timezone
-import logging
 from typing import Any, Iterable, Mapping
 from uuid import UUID
 
@@ -29,7 +29,6 @@ from cognee.modules.weave.organizations import (
     get_organization_binding,
     set_weave_organization_scope,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -275,15 +274,12 @@ async def _graph_candidates(
 async def _vector_candidates(
     request: RecallRequest,
     snapshots: Mapping[int, WeaveRepositorySnapshot],
-    graph_nodes: Iterable[Any],
+    graph,
 ) -> list[RecallCandidate]:
     vector = await get_vector_engine_async()
     # Vector payloads intentionally contain only index metadata. Hydrate each
     # semantic hit from the same dataset-scoped graph so provenance cannot be
     # accepted from an untrusted or stale vector payload.
-    graph_properties = {
-        str(node_id): _properties(raw_properties) for node_id, raw_properties in (graph_nodes or [])
-    }
     candidates: dict[tuple[int, str], RecallCandidate] = {}
 
     available = await asyncio.gather(*(vector.has_collection(name) for name in _VECTOR_COLLECTIONS))
@@ -306,6 +302,16 @@ async def _vector_candidates(
     result_groups = await asyncio.gather(
         *(search_collection(collection_name) for collection_name in collection_names)
     )
+    scores: dict[str, float] = {}
+    for results in result_groups:
+        for result in results:
+            node_id = str(result.id)
+            score = float(result.score)
+            scores[node_id] = min(scores.get(node_id, score), score)
+    hydrated = await graph.get_nodes(list(scores))
+    graph_properties = {
+        str(properties.get("id")): _properties(properties) for properties in hydrated
+    }
     for results in result_groups:
         for result in results:
             properties = graph_properties.get(str(result.id), {})
@@ -353,11 +359,13 @@ async def _recall_scoped(
     ):
         graph = await get_graph_engine()
         graph_nodes, graph_edges = await graph.get_filtered_graph_data(
-            [{"type": list(CODE_NODE_TYPES)}]
+            [{"type": list(CODE_NODE_TYPES)}],
+            max_nodes=500,
+            max_edges=1000,
         )
         graph_candidates, vector_candidates = await asyncio.gather(
             _graph_candidates(request, snapshots, graph_nodes, graph_edges),
-            _vector_candidates(request, snapshots, graph_nodes),
+            _vector_candidates(request, snapshots, graph),
         )
 
     repositories = [_repository_reference(record) for record in records]

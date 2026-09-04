@@ -86,6 +86,22 @@ async def test_failed_delivery_can_retry_same_job():
 
 
 @pytest.mark.asyncio
+async def test_crashed_running_delivery_can_be_reclaimed_under_the_operation_lock():
+    from cognee.modules.weave.indexing import InMemoryIndexStateStore
+
+    store = InMemoryIndexStateStore()
+    request = _request()
+    first = await store.accept(request)
+    assert await store.claim(first.id)
+
+    retry = await store.accept(request, reclaim_running=True)
+
+    assert retry.id == first.id
+    assert retry.status == "queued"
+    assert retry.attempt_count == 2
+
+
+@pytest.mark.asyncio
 async def test_same_sha_with_new_pipeline_version_is_new_work():
     from cognee.modules.weave.indexing import InMemoryIndexStateStore
 

@@ -32,7 +32,7 @@ cleanup() {
 trap cleanup EXIT
 
 docker compose -p "$project" -f "$compose_file" exec -T postgres \
-  pg_dump --username=cognee --dbname=cognee_db --format=custom --no-owner --no-acl > "$temporary"
+  pg_dump --username=cognee_admin --dbname=cognee_db --format=custom --no-owner --no-acl > "$temporary"
 
 if [ ! -s "$temporary" ]; then
   echo "backup is empty" >&2

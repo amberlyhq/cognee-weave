@@ -14,6 +14,11 @@ fi
 
 : "${RESTORE_ORGANIZATION_ID:?RESTORE_ORGANIZATION_ID is required}"
 : "${RESTORE_REPOSITORY_ID:?RESTORE_REPOSITORY_ID is required}"
+: "${RESTORE_EXPECTED_EXPORT:?RESTORE_EXPECTED_EXPORT is required}"
+if [[ "$RESTORE_EXPECTED_EXPORT" != /* ]] || [ ! -s "$RESTORE_EXPECTED_EXPORT" ]; then
+  echo "RESTORE_EXPECTED_EXPORT must be an absolute non-empty file" >&2
+  exit 2
+fi
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 compose_file="${WEAVE_COMPOSE_FILE:-$root/deployment/docker-compose.weave.yml}"
@@ -63,7 +68,7 @@ export_response="$(curl -fsS \
   -H "Authorization: Bearer ${WEAVE_INTERNAL_TOKEN}" \
   "$base_url/api/v1/weave/organizations/${RESTORE_ORGANIZATION_ID}/export?repository_id=${RESTORE_REPOSITORY_ID}")"
 printf '%s' "$export_response" | python -c '
-import json, os, sys
+import json, os, pathlib, sys
 value = json.load(sys.stdin)
 assert value["organization_id"] == os.environ["RESTORE_ORGANIZATION_ID"]
 repository_id = int(os.environ["RESTORE_REPOSITORY_ID"])
@@ -73,6 +78,17 @@ assert value["nodes"]
 assert value["edges"]
 assert all(item["github_repository_id"] == repository_id for item in value["nodes"])
 assert all(item["indexed_sha"] for item in value["nodes"])
+
+expected = json.loads(pathlib.Path(os.environ["RESTORE_EXPECTED_EXPORT"]).read_text())
+def normalized(item):
+    if isinstance(item, dict):
+        return {key: normalized(child) for key, child in item.items() if key != "age_seconds"}
+    if isinstance(item, list):
+        children = [normalized(child) for child in item]
+        return sorted(children, key=lambda child: json.dumps(child, sort_keys=True))
+    return item
+if normalized(value) != normalized(expected):
+    raise SystemExit("restored export does not match the backup source")
 '
 
 echo "restore drill passed for ${RESTORE_ORGANIZATION_ID}/${RESTORE_REPOSITORY_ID} in ${restore_project}"

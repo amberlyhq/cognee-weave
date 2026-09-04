@@ -120,6 +120,7 @@ class CogneeOrganizationProvisioningBackend:
     async def get(self, organization_id: UUID) -> Optional[OrganizationBinding]:
         engine = get_relational_engine()
         async with engine.get_async_session() as session:
+            await set_weave_organization_scope(session, organization_id)
             record = await session.scalar(
                 select(WeaveOrganizationBinding).where(
                     WeaveOrganizationBinding.organization_id == organization_id,
@@ -170,6 +171,7 @@ class CogneeOrganizationProvisioningBackend:
     async def provision(self, organization_id: UUID) -> OrganizationBinding:
         engine = get_relational_engine()
         async with engine.get_async_session() as lock_session:
+            await set_weave_organization_scope(lock_session, organization_id)
             if _dialect_name(lock_session) == "postgresql":
                 await lock_session.execute(
                     text("SELECT pg_advisory_xact_lock(:lock_key)"),

@@ -85,7 +85,7 @@ index_fixture() {
     -F "default_branch=main" \
     -F "requested_sha=${sha}" \
     -F "pipeline_version=weave-code.v1" \
-    -F "extraction_version=tree-sitter.v1" \
+    -F "extraction_version=enola-0.3.13" \
     "$base_url/api/v1/weave/organizations/${organization}/repositories/index" >/dev/null
 }
 
@@ -160,6 +160,7 @@ curl -fsS -X DELETE -H "Authorization: Bearer ${WEAVE_INTERNAL_TOKEN}" \
 
 export_response="$(curl -fsS -H "Authorization: Bearer ${WEAVE_INTERNAL_TOKEN}" \
   "$base_url/api/v1/weave/organizations/${organization_b}/export?repository_id=${repository_b}")"
+printf '%s' "$export_response" > "$temporary/expected-export.json"
 printf '%s' "$export_response" | ORGANIZATION_ID="$organization_b" REPOSITORY_ID="$repository_b" SHA="$sha_b" python -c '
 import json, os, sys
 value = json.load(sys.stdin)
@@ -187,6 +188,7 @@ fi
 backup="$temporary/weave.dump"
 "$root/scripts/weave-backup.sh" "$backup" >/dev/null
 RESTORE_ORGANIZATION_ID="$organization_b" RESTORE_REPOSITORY_ID="$repository_b" \
+  RESTORE_EXPECTED_EXPORT="$temporary/expected-export.json" \
   RESTORE_HTTP_PORT=18001 RESTORE_POSTGRES_PORT=15433 \
   "$root/scripts/weave-restore-drill.sh" "$backup" >/dev/null
 

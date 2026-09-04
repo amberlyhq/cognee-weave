@@ -17,6 +17,7 @@ from cognee.modules.retrieval.code_retriever import (
 )
 from cognee.modules.users.models import DatasetDatabase
 from cognee.modules.weave.contracts import DeleteResponse, SurfaceEdge, SurfaceResponse
+from cognee.modules.weave.indexing import weave_operation_lock
 from cognee.modules.weave.models import WeaveOrganizationBinding, WeaveRepositorySnapshot
 from cognee.modules.weave.organizations import (
     OrganizationBinding,
@@ -84,7 +85,9 @@ async def _read_surface(
     ):
         graph = await get_graph_engine()
         raw_nodes, raw_edges = await graph.get_filtered_graph_data(
-            [{"type": [*CODE_NODE_TYPES, "CodeRepository"]}]
+            [{"type": [*CODE_NODE_TYPES, "CodeRepository"]}],
+            max_nodes=500,
+            max_edges=1000,
         )
 
     nodes = []
@@ -154,7 +157,6 @@ async def _mark_repository_deleted(
             .where(
                 WeaveRepositorySnapshot.organization_id == organization_id,
                 WeaveRepositorySnapshot.github_repository_id == github_repository_id,
-                WeaveRepositorySnapshot.deleted_at.is_(None),
             )
             .with_for_update()
         )
@@ -169,44 +171,49 @@ async def delete_repository(
     organization_id: UUID,
     github_repository_id: int,
 ) -> DeleteResponse:
-    binding = await get_organization_binding(organization_id)
-    if binding is None or github_repository_id <= 0:
-        raise SurfaceNotFound()
-    await _mark_repository_deleted(organization_id, github_repository_id)
+    async with weave_operation_lock(organization_id, github_repository_id):
+        binding = await get_organization_binding(organization_id)
+        if binding is None or github_repository_id <= 0:
+            raise SurfaceNotFound()
 
-    async with scoped_database_context_variables(
-        binding.dataset_id,
-        binding.service_user_id,
-    ):
-        graph = await get_graph_engine()
-        vector = await get_vector_engine_async()
-        raw_nodes, _raw_edges = await graph.get_filtered_graph_data(
-            [{"type": [*CODE_NODE_TYPES, "CodeRepository"]}]
-        )
-        by_collection: dict[str, list[UUID]] = {}
-        node_ids = []
-        for node_id, raw_properties in raw_nodes or []:
-            properties = _properties(raw_properties)
-            if str(properties.get("organization_id")) != str(organization_id):
-                continue
-            try:
-                repository_id = int(properties.get("github_repository_id"))
-            except (TypeError, ValueError):
-                continue
-            if repository_id != github_repository_id:
-                continue
-            node_ids.append(str(node_id))
-            node_type = str(properties.get("type") or "")
-            if node_type:
-                by_collection.setdefault(f"{node_type}_name", []).append(UUID(str(node_id)))
+        async with scoped_database_context_variables(
+            binding.dataset_id,
+            binding.service_user_id,
+        ):
+            graph = await get_graph_engine()
+            vector = await get_vector_engine_async()
+            raw_nodes, _raw_edges = await graph.get_filtered_graph_data(
+                [{"type": [*CODE_NODE_TYPES, "CodeRepository"]}],
+                max_edges=0,
+            )
+            by_collection: dict[str, list[UUID]] = {}
+            node_ids = []
+            for node_id, raw_properties in raw_nodes or []:
+                properties = _properties(raw_properties)
+                if str(properties.get("organization_id")) != str(organization_id):
+                    continue
+                try:
+                    repository_id = int(properties.get("github_repository_id"))
+                except (TypeError, ValueError):
+                    continue
+                if repository_id != github_repository_id:
+                    continue
+                node_ids.append(str(node_id))
+                node_type = str(properties.get("type") or "")
+                if node_type:
+                    by_collection.setdefault(f"{node_type}_name", []).append(UUID(str(node_id)))
 
-        for collection_name, point_ids in by_collection.items():
-            try:
-                await vector.delete_data_points(collection_name, point_ids)
-            except CollectionNotFoundError:
-                pass
-        await graph.delete_nodes(node_ids)
-        invalidate_code_graph_snapshot_cache(dataset_id=binding.dataset_id)
+            for collection_name, point_ids in by_collection.items():
+                try:
+                    await vector.delete_data_points(collection_name, point_ids)
+                except CollectionNotFoundError:
+                    pass
+            await graph.delete_nodes(node_ids)
+            invalidate_code_graph_snapshot_cache(dataset_id=binding.dataset_id)
+
+        # Publish the tombstone only after every physical cleanup succeeds. A
+        # failed cleanup remains active and the same DELETE can safely retry.
+        await _mark_repository_deleted(organization_id, github_repository_id)
 
     return DeleteResponse(
         organization_id=organization_id,
@@ -214,11 +221,12 @@ async def delete_repository(
     )
 
 
-async def _mark_organization_deleted(
+async def _load_organization_for_delete(
     organization_id: UUID,
 ) -> tuple[OrganizationBinding, DatasetDatabase]:
     engine = get_relational_engine()
     async with engine.get_async_session() as session:
+        await set_weave_organization_scope(session, organization_id)
         record = await session.scalar(
             select(WeaveOrganizationBinding)
             .where(
@@ -242,9 +250,25 @@ async def _mark_organization_deleted(
             graph_schema=database.graph_database_connection_info["graph_database_schema"],
             vector_schema=database.vector_database_connection_info["schema"],
         )
+        return binding, database
+
+
+async def _mark_organization_deleted(organization_id: UUID) -> None:
+    engine = get_relational_engine()
+    async with engine.get_async_session() as session:
+        await set_weave_organization_scope(session, organization_id)
+        record = await session.scalar(
+            select(WeaveOrganizationBinding)
+            .where(
+                WeaveOrganizationBinding.organization_id == organization_id,
+                WeaveOrganizationBinding.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+        if record is None:
+            raise SurfaceNotFound()
         deleted_at = _now()
         record.deleted_at = deleted_at
-        await set_weave_organization_scope(session, organization_id)
         await session.execute(
             update(WeaveRepositorySnapshot)
             .where(
@@ -254,24 +278,25 @@ async def _mark_organization_deleted(
             .values(deleted_at=deleted_at, status="deleted")
         )
         await session.commit()
-        return binding, database
 
 
 async def delete_organization(organization_id: UUID) -> DeleteResponse:
-    binding, database = await _mark_organization_deleted(organization_id)
-    async with scoped_database_context_variables(
-        binding.dataset_id,
-        binding.service_user_id,
-    ):
-        invalidate_code_graph_snapshot_cache(dataset_id=binding.dataset_id)
+    async with weave_operation_lock(organization_id):
+        binding, database = await _load_organization_for_delete(organization_id)
+        async with scoped_database_context_variables(
+            binding.dataset_id,
+            binding.service_user_id,
+        ):
+            invalidate_code_graph_snapshot_cache(dataset_id=binding.dataset_id)
 
-    from cognee.infrastructure.databases.graph.postgres_demo.PostgresGraphSharedDatasetDatabaseHandler import (
-        PostgresGraphSharedDatasetDatabaseHandler,
-    )
-    from cognee.infrastructure.databases.vector.pgvector.PGVectorSharedDatasetDatabaseHandler import (
-        PGVectorSharedDatasetDatabaseHandler,
-    )
+        from cognee.infrastructure.databases.graph.get_graph_engine import graph_engine_cache
+        from cognee.infrastructure.databases.vector.pgvector.PGVectorSharedDatasetDatabaseHandler import (
+            PGVectorSharedDatasetDatabaseHandler,
+        )
 
-    await PGVectorSharedDatasetDatabaseHandler.delete_dataset(database)
-    await PostgresGraphSharedDatasetDatabaseHandler.delete_dataset(database)
-    return DeleteResponse(organization_id=organization_id)
+        # Graph and vector share one schema. Evict both adapter caches first,
+        # then issue one idempotent DROP SCHEMA CASCADE.
+        graph_engine_cache.evict_matching(graph_database_schema=binding.graph_schema)
+        await PGVectorSharedDatasetDatabaseHandler.delete_dataset(database)
+        await _mark_organization_deleted(organization_id)
+        return DeleteResponse(organization_id=organization_id)

@@ -2,7 +2,6 @@ from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[5]
 
 
@@ -67,6 +66,32 @@ def test_fresh_database_registers_weave_models_before_create_all():
     fresh_create = "await get_relational_engine().create_database()"
     assert model_import in startup
     assert startup.index(model_import) < startup.index(fresh_create)
+    assert "ensure_weave_rls_policies" in startup
+    assert startup.index(fresh_create) < startup.index("await ensure_weave_rls_policies()")
+
+
+def test_rls_covers_every_shared_control_plane_table_and_runtime_is_not_superuser():
+    migration = (
+        ROOT / "cognee/alembic/versions/d1e3f5a7b9c2_add_weave_organization_control_plane.py"
+    ).read_text()
+    compose = (ROOT / "deployment/docker-compose.weave.yml").read_text()
+    assert '"weave_organization_bindings"' in migration
+    assert "POSTGRES_USER: cognee_admin" in compose
+    assert "DB_USERNAME: cognee" in compose
+    assert "init-weave-postgres.sh" in compose
+    assert (ROOT / "deployment/init-weave-postgres.sh").exists()
+
+
+def test_strict_mode_exposes_only_health_root_and_weave_routes():
+    client = (ROOT / "cognee/api/client.py").read_text()
+    assert "_restrict_to_weave_routes" in client
+    assert '{"/", "/health", "/api/v1/weave"}' in client
+
+
+def test_weave_index_api_pins_the_actual_extractor_version():
+    router = (ROOT / "cognee/api/v1/weave/routers/get_weave_router.py").read_text()
+    assert "ENOLA_PINNED_VERSION" in router
+    assert "extraction_version != f\"enola-{ENOLA_PINNED_VERSION}\"" in router
 
 
 def test_weave_ci_runs_every_fork_specific_postgres_gate():
@@ -83,6 +108,9 @@ def test_weave_ci_runs_every_fork_specific_postgres_gate():
         "cognee/tests/e2e/postgres/test_weave_surface_isolation.py",
     ):
         assert path in workflow
+    assert "scripts/weave-parity.sh" in workflow
+    assert "scripts/weave-secret-scan.sh" in workflow
+    assert "ruff check --select E4,E7,E9,F --ignore F401 cognee" in workflow
 
 
 def test_weekly_upstream_sync_opens_a_manual_review_pr_without_auto_merge():
@@ -140,4 +168,5 @@ def test_parity_backup_and_restore_scripts_are_fail_closed():
     assert "cognee-weave-restore-" in restore
     assert "pg_restore" in restore
     assert "RESTORE_ORGANIZATION_ID" in restore
-    assert 'assert value["edges"]' in restore
+    assert "RESTORE_EXPECTED_EXPORT" in restore
+    assert "restored export does not match the backup source" in restore

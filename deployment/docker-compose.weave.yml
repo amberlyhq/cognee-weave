@@ -4,18 +4,20 @@ services:
   postgres:
     image: pgvector/pgvector:0.8.6-pg17-bookworm
     environment:
-      POSTGRES_USER: cognee
+      POSTGRES_USER: cognee_admin
       POSTGRES_PASSWORD: ${WEAVE_DB_PASSWORD:?WEAVE_DB_PASSWORD is required}
       POSTGRES_DB: cognee_db
+      WEAVE_DB_PASSWORD: ${WEAVE_DB_PASSWORD:?WEAVE_DB_PASSWORD is required}
     ports:
       - "127.0.0.1:${WEAVE_POSTGRES_PORT:-15432}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cognee -d cognee_db"]
+      test: ["CMD-SHELL", "pg_isready -U cognee_admin -d cognee_db"]
       interval: 2s
       timeout: 5s
       retries: 30
     volumes:
       - weave-postgres:/var/lib/postgresql/data
+      - ./init-weave-postgres.sh:/docker-entrypoint-initdb.d/10-init-weave-postgres.sh:ro
 
   weave:
     image: cognee-weave-parity:local

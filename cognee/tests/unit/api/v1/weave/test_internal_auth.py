@@ -1,7 +1,7 @@
 from uuid import uuid4
 
 import pytest
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
 
@@ -139,3 +139,39 @@ def test_foreign_and_absent_surface_targets_have_the_same_response(monkeypatch):
 
     assert foreign.status_code == absent.status_code == 404
     assert foreign.json() == absent.json() == {"detail": "Resource not found"}
+
+
+def test_strict_mode_removes_every_non_weave_route():
+    from cognee.api.client import _restrict_to_weave_routes
+
+    test_app = FastAPI()
+    weave = APIRouter()
+    datasets = APIRouter()
+
+    @test_app.get("/")
+    async def root():
+        return {"status": "ok"}
+
+    @test_app.get("/health")
+    async def health():
+        return {"status": "ok"}
+
+    @weave.get("/recall")
+    async def recall():
+        return {"candidates": []}
+
+    @datasets.get("/")
+    async def list_datasets():
+        return []
+
+    test_app.include_router(weave, prefix="/api/v1/weave")
+    test_app.include_router(datasets, prefix="/api/v1/datasets")
+
+    _restrict_to_weave_routes(test_app)
+
+    visible = {
+        getattr(route, "path", None)
+        or getattr(getattr(route, "include_context", None), "prefix", None)
+        for route in test_app.router.routes
+    }
+    assert visible == {"/", "/health", "/api/v1/weave"}

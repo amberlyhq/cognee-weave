@@ -1,6 +1,7 @@
 import asyncio
-import re
 import hashlib
+import re
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Optional
@@ -14,7 +15,6 @@ from cognee.modules.weave.organizations import (
     get_organization_binding,
     set_weave_organization_scope,
 )
-
 
 _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 _GITHUB_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -111,13 +111,17 @@ class InMemoryIndexStateStore:
             request.extraction_version,
         )
 
-    async def accept(self, request: IndexRequest) -> IndexJobState:
+    async def accept(
+        self, request: IndexRequest, *, reclaim_running: bool = False
+    ) -> IndexJobState:
         async with self._lock:
             identity = self._identity(request)
             existing_id = self._identities.get(identity)
             if existing_id is not None:
                 existing = self.jobs[existing_id]
-                if existing.status == "failed":
+                if existing.status == "failed" or (
+                    reclaim_running and existing.status == "running"
+                ):
                     existing = replace(
                         existing,
                         status="queued",
@@ -219,6 +223,41 @@ def _store_lock_key(request: IndexRequest) -> int:
     return int.from_bytes(digest, "big", signed=True)
 
 
+def _operation_lock_key(namespace: str, identity: bytes) -> int:
+    digest = hashlib.sha256(namespace.encode() + b":" + identity).digest()[:8]
+    return int.from_bytes(digest, "big", signed=True)
+
+
+@asynccontextmanager
+async def weave_operation_lock(
+    organization_id: UUID, github_repository_id: int | None = None
+):
+    """Serialize tenant mutation, then repository mutation, across processes."""
+
+    engine = get_relational_engine()
+    async with engine.get_async_session() as session:
+        if session.get_bind().dialect.name != "postgresql":
+            yield
+            return
+        keys = [_operation_lock_key("weave-organization", organization_id.bytes)]
+        if github_repository_id is not None:
+            keys.append(
+                _operation_lock_key(
+                    "weave-repository",
+                    organization_id.bytes + github_repository_id.to_bytes(8, "big"),
+                )
+            )
+        try:
+            for key in keys:
+                await session.execute(text("SELECT pg_advisory_lock(:lock_key)"), {"lock_key": key})
+            yield
+        finally:
+            for key in reversed(keys):
+                await session.execute(
+                    text("SELECT pg_advisory_unlock(:lock_key)"), {"lock_key": key}
+                )
+
+
 def _job_state(job: WeaveIndexJob, snapshot: WeaveRepositorySnapshot) -> IndexJobState:
     request = IndexRequest(
         organization_id=job.organization_id,
@@ -253,7 +292,9 @@ def _orm_job_is_current(job: WeaveIndexJob, snapshot: WeaveRepositorySnapshot) -
 class PostgresIndexStateStore:
     """Transactional exact-SHA ledger protected by organization RLS."""
 
-    async def accept(self, request: IndexRequest) -> IndexJobState:
+    async def accept(
+        self, request: IndexRequest, *, reclaim_running: bool = False
+    ) -> IndexJobState:
         engine = get_relational_engine()
         async with engine.get_async_session() as session:
             await set_weave_organization_scope(session, request.organization_id)
@@ -282,7 +323,11 @@ class PostgresIndexStateStore:
                 if snapshot is None:
                     raise RuntimeError("Index job exists without repository snapshot")
                 restore_deleted = snapshot.deleted_at is not None
-                if job.status == "failed" or restore_deleted:
+                if (
+                    job.status == "failed"
+                    or (reclaim_running and job.status == "running")
+                    or restore_deleted
+                ):
                     job.status = "queued"
                     job.error_code = None
                     job.indexed_sha = None
@@ -469,59 +514,60 @@ async def index_repository_archive(
     """Validate and index one exact GitHub default-branch archive."""
 
     from cognee.context_global_variables import scoped_database_context_variables
+    from cognee.modules.run_custom_pipeline.run_custom_pipeline import run_custom_pipeline
     from cognee.modules.users.methods import get_user
     from cognee.modules.weave.archive import UnsafeArchiveError, validated_archive
     from cognee.modules.weave.config import get_weave_embedding_config
     from cognee.tasks.code_graph.extract_code_graph import get_code_graph_tasks
     from cognee.tasks.code_graph.models import RepositoryProvenance
-    from cognee.modules.run_custom_pipeline.run_custom_pipeline import run_custom_pipeline
 
     store = store or PostgresIndexStateStore()
-    binding = await get_organization_binding(request.organization_id)
-    if binding is None:
-        raise LookupError("Organization is not provisioned")
-    job = await store.accept(request)
-    if not await store.claim(request.organization_id, job.id):
-        return job
+    async with weave_operation_lock(request.organization_id, request.github_repository_id):
+        binding = await get_organization_binding(request.organization_id)
+        if binding is None:
+            raise LookupError("Organization is not provisioned")
+        job = await store.accept(request, reclaim_running=True)
+        if not await store.claim(request.organization_id, job.id):
+            return job
 
-    provenance = RepositoryProvenance(
-        organization_id=request.organization_id,
-        github_repository_id=request.github_repository_id,
-        repository_owner=request.repository_owner,
-        repository_name=request.repository_name,
-        indexed_sha=request.requested_sha,
-        pipeline_version=request.pipeline_version,
-        extraction_version=request.extraction_version,
-    )
-    embedding_config = get_weave_embedding_config()
-    try:
-        with validated_archive(archive_path) as repository:
-            service_user = await get_user(binding.service_user_id)
-            async with scoped_database_context_variables(
-                binding.dataset_id,
-                binding.service_user_id,
-                embedding_config=embedding_config,
-            ):
-                await run_custom_pipeline(
-                    tasks=get_code_graph_tasks(
-                        repository,
-                        index_vectors=True,
-                        repository_provenance=provenance,
-                    ),
-                    data=str(repository),
-                    dataset=binding.dataset_id,
-                    user=service_user,
-                    pipeline_name="weave_exact_sha_code_graph",
-                    use_pipeline_cache=False,
-                    run_in_background=False,
-                    skip_connection_test=True,
+        provenance = RepositoryProvenance(
+            organization_id=request.organization_id,
+            github_repository_id=request.github_repository_id,
+            repository_owner=request.repository_owner,
+            repository_name=request.repository_name,
+            indexed_sha=request.requested_sha,
+            pipeline_version=request.pipeline_version,
+            extraction_version=request.extraction_version,
+        )
+        embedding_config = get_weave_embedding_config()
+        try:
+            with validated_archive(archive_path) as repository:
+                service_user = await get_user(binding.service_user_id)
+                async with scoped_database_context_variables(
+                    binding.dataset_id,
+                    binding.service_user_id,
                     embedding_config=embedding_config,
-                )
-        await store.succeed(request.organization_id, job.id, request.requested_sha)
-    except UnsafeArchiveError:
-        await store.fail(request.organization_id, job.id, "archive_invalid")
-        raise
-    except Exception:
-        await store.fail(request.organization_id, job.id, "indexing_failed")
-        raise
-    return job
+                ):
+                    await run_custom_pipeline(
+                        tasks=get_code_graph_tasks(
+                            repository,
+                            index_vectors=True,
+                            repository_provenance=provenance,
+                        ),
+                        data=str(repository),
+                        dataset=binding.dataset_id,
+                        user=service_user,
+                        pipeline_name="weave_exact_sha_code_graph",
+                        use_pipeline_cache=False,
+                        run_in_background=False,
+                        skip_connection_test=True,
+                        embedding_config=embedding_config,
+                    )
+            await store.succeed(request.organization_id, job.id, request.requested_sha)
+        except UnsafeArchiveError:
+            await store.fail(request.organization_id, job.id, "archive_invalid")
+            raise
+        except Exception:
+            await store.fail(request.organization_id, job.id, "indexing_failed")
+            raise
+        return job

@@ -11,6 +11,7 @@ from cognee.modules.weave.contracts import (
     SurfaceResponse,
 )
 from cognee.modules.weave.organizations import provision_organization
+from cognee.tasks.code_graph.install_enola import ENOLA_PINNED_VERSION
 
 
 class ProvisionOrganizationResponse(BaseModel):
@@ -58,6 +59,8 @@ def get_weave_router() -> APIRouter:
         from cognee.modules.weave.indexing import IndexRequest, index_repository_archive
 
         try:
+            if extraction_version != f"enola-{ENOLA_PINNED_VERSION}":
+                raise ValueError("extraction_version does not match the installed extractor")
             request = IndexRequest(
                 organization_id=organization_id,
                 github_repository_id=github_repository_id,

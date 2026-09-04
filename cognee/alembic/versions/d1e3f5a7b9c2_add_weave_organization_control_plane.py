@@ -7,9 +7,8 @@ Create Date: 2026-08-31 18:00:00.000000
 
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision: str = "d1e3f5a7b9c2"
 down_revision: Union[str, None] = "c7e2a9b4d1f3"
@@ -17,7 +16,11 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-_RLS_TABLES = ("weave_repository_snapshots", "weave_index_jobs")
+_RLS_TABLES = (
+    "weave_organization_bindings",
+    "weave_repository_snapshots",
+    "weave_index_jobs",
+)
 
 
 def _enable_organization_rls(table_name: str) -> None:

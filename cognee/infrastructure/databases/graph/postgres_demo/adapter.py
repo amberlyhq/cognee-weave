@@ -10,32 +10,32 @@ us at social@cognee.ai to explore the options.
 """
 
 import json
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
 from uuid import UUID
-from typing import Callable, Dict, Any, List, Union, Optional, Tuple, Type
 
 from sqlalchemy import NullPool, text
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from cognee.infrastructure.engine import DataPoint
 from cognee.infrastructure.databases.graph.graph_db_interface import GraphDBInterface
-from cognee.infrastructure.databases.relational import get_relational_config
-from cognee.modules.storage.utils import JSONEncoder
-from cognee.modules.graph.methods.sanitize_relational_payload import sanitize_relational_payload
 from cognee.infrastructure.databases.provenance import (
     EdgeDeleteData,
     EdgeIdentity,
     NodeDeleteData,
-)
-from cognee.infrastructure.databases.provenance.source_refs import (
-    get_dataset_id_from_source_ref_key,
-    get_pipeline_run_id_from_source_run_ref,
-    get_source_ref_key_from_source_run_ref,
 )
 from cognee.infrastructure.databases.provenance.source_ref_state import (
     ProvenanceColumns,
     provenance_after_attach,
     provenance_after_remove,
 )
+from cognee.infrastructure.databases.provenance.source_refs import (
+    get_dataset_id_from_source_ref_key,
+    get_pipeline_run_id_from_source_run_ref,
+    get_source_ref_key_from_source_run_ref,
+)
+from cognee.infrastructure.databases.relational import get_relational_config
+from cognee.infrastructure.engine import DataPoint
+from cognee.modules.graph.methods.sanitize_relational_payload import sanitize_relational_payload
+from cognee.modules.storage.utils import JSONEncoder
 
 from .tables import _meta
 
@@ -596,17 +596,21 @@ class PostgresDemoAdapter(GraphDBInterface):
 
     @staticmethod
     async def _fetch_edges_within(
-        session: AsyncSession, node_ids: list[str]
+        session: AsyncSession, node_ids: list[str], limit: int | None = None
     ) -> list[tuple[str, str, str, dict[str, Any]]]:
         if not node_ids:
             return []
+        if limit is not None and limit <= 0:
+            return []
+        limit_clause = " LIMIT :edge_limit" if limit is not None else ""
         result = await session.execute(
             text("""
                 SELECT source_id, target_id, relationship_name, properties
                 FROM graph_edge
                 WHERE source_id = ANY(:ids) AND target_id = ANY(:ids)
-            """),
-            {"ids": node_ids},
+                ORDER BY source_id, target_id, relationship_name
+            """ + limit_clause),
+            {"ids": node_ids, **({"edge_limit": limit} if limit is not None else {})},
         )
         return [
             (
@@ -676,37 +680,60 @@ class PostgresDemoAdapter(GraphDBInterface):
             return nodes, edges
 
     async def get_filtered_graph_data(
-        self, attribute_filters: List[Dict[str, List[Union[str, int]]]]
+        self,
+        attribute_filters: List[Dict[str, List[Union[str, int]]]],
+        *,
+        max_nodes: int | None = None,
+        max_edges: int | None = None,
     ) -> Tuple[List[Tuple[str, Dict]], List[Tuple[str, str, str, Dict]]]:
         """Return core-field matches and the edges induced by those nodes."""
         if not attribute_filters:
             return await self.get_graph_data()
 
-        filters: list[tuple[str, set[str]]] = []
+        filters: list[tuple[str, list[str]]] = []
         for filter_dict in attribute_filters:
             for attr, filter_values in filter_dict.items():
                 if attr not in self._ALLOWED_FILTER_ATTRS:
                     raise ValueError(f"Invalid filter attribute: {attr!r}")
-                filters.append((attr, {str(value) for value in filter_values}))
+                filters.append((attr, [str(value) for value in filter_values]))
 
         if not filters:
             return await self.get_graph_data()
 
+        if max_nodes is not None and max_nodes <= 0:
+            return [], []
+        clauses = []
+        parameters: dict[str, Any] = {}
+        for index, (attribute, values) in enumerate(filters):
+            parameter = f"filter_{index}"
+            clauses.append(f"{attribute} = ANY(:{parameter})")
+            parameters[parameter] = values
+        node_limit = " LIMIT :node_limit" if max_nodes is not None else ""
+        if max_nodes is not None:
+            parameters["node_limit"] = max_nodes
+
         async with self.sessionmaker() as session:
             result = await session.execute(
-                text("SELECT id, name, type, properties FROM graph_node")
+                text(
+                    "SELECT id, name, type, properties FROM graph_node WHERE "
+                    + " AND ".join(clauses)
+                    + " ORDER BY id"
+                    + node_limit
+                ),
+                parameters,
             )
             nodes = []
             for row in result.mappings().all():
-                if all(str(row[attribute]) in values for attribute, values in filters):
-                    properties = {
-                        "name": row["name"],
-                        "type": row["type"],
-                        **_decode_properties(row["properties"]),
-                    }
-                    nodes.append((row["id"], properties))
+                properties = {
+                    "name": row["name"],
+                    "type": row["type"],
+                    **_decode_properties(row["properties"]),
+                }
+                nodes.append((row["id"], properties))
 
-            edges = await self._fetch_edges_within(session, [node_id for node_id, _ in nodes])
+            edges = await self._fetch_edges_within(
+                session, [node_id for node_id, _ in nodes], max_edges
+            )
             return nodes, edges
 
     async def get_nodeset_subgraph(
