@@ -96,7 +96,7 @@ async def _load_snapshots(
         if repository_ids:
             query = query.where(WeaveRepositorySnapshot.github_repository_id.in_(repository_ids))
         records = await session.scalars(
-            query.order_by(WeaveRepositorySnapshot.github_repository_id)
+            query.order_by(WeaveRepositorySnapshot.github_repository_id).limit(20)
         )
         return list(records)
 

@@ -101,6 +101,42 @@ def test_recall_response_is_provenance_first_and_has_no_governance_decision_fiel
     assert forbidden.isdisjoint({key.lower() for key in keys(dumped)})
 
 
+@pytest.mark.asyncio
+async def test_cross_repository_snapshot_lookup_is_bounded(monkeypatch):
+    from cognee.modules.weave import recall as recall_module
+
+    captured = {}
+
+    class Session:
+        async def scalars(self, query):
+            captured["query"] = query
+            return []
+
+    class SessionContext:
+        async def __aenter__(self):
+            return Session()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class Engine:
+        def get_async_session(self):
+            return SessionContext()
+
+    async def scope(_session, _organization_id):
+        return None
+
+    monkeypatch.setattr(recall_module, "get_relational_engine", lambda: Engine())
+    monkeypatch.setattr(recall_module, "set_weave_organization_scope", scope)
+
+    await recall_module._load_snapshots(
+        UUID("7e1a7b9d-08c2-4f57-9884-623e01b68a01"),
+        [],
+    )
+
+    assert captured["query"]._limit_clause.value == 20
+
+
 @pytest.mark.parametrize("status", ["available", "stale", "unavailable", "timed_out"])
 def test_recall_statuses_are_explicit(status):
     from cognee.modules.weave.contracts import RecallResponse

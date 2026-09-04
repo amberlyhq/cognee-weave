@@ -21,11 +21,19 @@ WEAVE_EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
 WEAVE_EMBEDDING_DIMENSIONS=384
 ```
 
-Set `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, and `DB_NAME` from the
-private Railway Postgres service. Set the matching `VECTOR_DB_*` and
-`GRAPH_DATABASE_*` host, port, username, password, and name values to the same
-service. Strict mode rejects any mismatch. Do not expose a public Weave domain.
-Amberly uses the Railway private hostname and the same `WEAVE_INTERNAL_TOKEN`.
+Use two Postgres users against the same private database:
+
+- The one-shot migration service uses the database-owner credentials supplied
+  by Railway. It runs `cognee-cli upgrade head` before the API starts.
+- The Weave API uses the dedicated `cognee` runtime user created by the database
+  bootstrap. It must be `NOSUPERUSER`, `NOCREATEDB`, `NOCREATEROLE`,
+  `NOREPLICATION`, must not bypass row security, and must not own the database.
+
+Set the API's matching `DB_*`, `VECTOR_DB_*`, and `GRAPH_DATABASE_*` username
+and password values to that runtime user. All three providers use the same host,
+port, and database. Strict mode rejects an owner/admin runtime credential or any
+provider mismatch. Do not expose a public Weave domain. Amberly uses the Railway
+private hostname and the same `WEAVE_INTERNAL_TOKEN`.
 
 `WEAVE_STRICT_MODE=true` makes container startup fail before migrations if any
 tenant, graph, or vector provider setting drifts from this all-Postgres shape.
@@ -45,8 +53,9 @@ existing project name. Set `WEAVE_PARITY_REPORT` to preserve its JSON receipt.
 ## Deploy and verify
 
 1. Build the reviewed `Dockerfile` with one private pgvector Postgres service.
-2. Set the strict variables above and run migrations through the image
-   entrypoint. Do not run raw Alembic against a fresh database.
+2. Bootstrap the `cognee` runtime role with a separate password. Run migrations
+   once with the database-owner credentials through `cognee-cli upgrade head`.
+   Do not run raw Alembic against a fresh database.
 3. Confirm `/health` inside the private network.
 4. Run the same two-tenant operations from `scripts/weave-parity.sh` against
    disposable organization UUIDs.

@@ -90,6 +90,9 @@ def test_rls_covers_every_shared_control_plane_table_on_fresh_and_existing_datab
     assert "ENABLE ROW LEVEL SECURITY" in forward_migration
     assert "FORCE ROW LEVEL SECURITY" in forward_migration
     assert "weave_organization_bindings_organization_isolation" in forward_migration
+    assert "ALTER DATABASE" in forward_migration
+    assert "current_database()" in forward_migration
+    assert "op.get_context().autocommit_block()" in forward_migration
     assert "POSTGRES_USER: cognee_admin" in compose
     assert "DB_USERNAME: cognee" in compose
     assert 'ENABLE_AUTO_MIGRATIONS: "false"' in compose

@@ -85,6 +85,20 @@ def upgrade() -> None:
     if op.get_bind().dialect.name != "postgresql":
         return
 
+    with op.get_context().autocommit_block():
+        op.execute(
+            """
+            DO $owner$
+            BEGIN
+                EXECUTE format(
+                    'ALTER DATABASE %I OWNER TO %I',
+                    current_database(),
+                    current_user
+                );
+            END
+            $owner$
+            """
+        )
     for table_name in _CONTROL_TABLES:
         op.execute(f'ALTER TABLE "{table_name}" OWNER TO CURRENT_USER')
 
