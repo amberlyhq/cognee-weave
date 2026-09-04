@@ -32,7 +32,7 @@ from cognee.infrastructure.session.get_session_manager import get_session_manage
 from cognee.modules.user_preferences import load_preference_text, load_preference_weights
 from cognee.shared.logging_utils import get_logger
 from cognee.infrastructure.databases.unified import get_unified_engine
-from cognee.context_global_variables import session_user
+from cognee.context_global_variables import session_user, strict_database_scope
 from cognee.infrastructure.databases.cache.config import CacheConfig
 
 logger = get_logger("GraphCompletionRetriever")
@@ -127,14 +127,14 @@ class GraphCompletionRetriever(BaseRetriever):
 
         validate_retriever_input(query, query_batch, self._use_session_cache())
 
-        self._unified_engine = await get_unified_engine()
-        is_empty = await self._unified_engine.graph.is_empty()
+        unified_engine = await get_unified_engine()
+        is_empty = await unified_engine.graph.is_empty()
 
         if is_empty:
             logger.warning("Search attempt on an empty knowledge graph")
             return []
 
-        triplets = await self.get_triplets(query, query_batch)
+        triplets = await self.get_triplets(query, query_batch, unified_engine=unified_engine)
 
         # Check if all triplets are empty, in case of batch queries
         if query_batch and all(len(batched_triplets) == 0 for batched_triplets in triplets):
@@ -167,6 +167,7 @@ class GraphCompletionRetriever(BaseRetriever):
         self,
         query: Optional[str] = None,
         query_batch: Optional[List[str]] = None,
+        unified_engine=None,
     ) -> Union[List[Edge], List[List[Edge]]]:
         """
         Retrieves relevant graph triplets based on a query string.
@@ -182,7 +183,8 @@ class GraphCompletionRetriever(BaseRetriever):
             - list: A list of found triplets that match the query.
         """
         collections = self._get_vector_index_collections()
-        unified_engine = getattr(self, "_unified_engine", None)
+        if unified_engine is None and strict_database_scope.get():
+            unified_engine = await get_unified_engine()
         # Personal prefers weights ride into the triplet scorer. The lookup is
         # memoized per context — on a concurrent session turn each gather lane
         # inherits the read warmed by warm_preference_cache; without that warm
@@ -283,11 +285,10 @@ class GraphCompletionRetriever(BaseRetriever):
     async def _build_global_context_prelude(self, query: Optional[str]) -> str:
         if not query:
             return ""
-        if getattr(self, "_unified_engine", None) is None:
-            self._unified_engine = await get_unified_engine()
+        unified_engine = await get_unified_engine()
         root_text = await load_root_text()
         top_summaries = await search_top_global_context_summaries(
-            query, self.global_context_index_top_k, self._unified_engine.vector
+            query, self.global_context_index_top_k, unified_engine.vector
         )
         return format_global_context_prelude(root_text, top_summaries)
 

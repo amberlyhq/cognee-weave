@@ -1,0 +1,119 @@
+name: Cognee Weave Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weave-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.11"
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --locked --dev --extra postgres
+      - name: Ruff
+        # The upstream tree has not yet adopted Ruff's opt-in modernization
+        # rules. Keep this fork gate on Python correctness errors.
+        run: uv run ruff check --select E4,E7,E9,F --ignore F401 cognee
+      - name: Focused unit tests
+        run: >-
+          uv run pytest
+          cognee/tests/unit/test_context_global_variables.py
+          cognee/tests/unit/infrastructure/databases/graph/test_postgres_adapter.py
+          cognee/tests/unit/infrastructure/databases/vector
+          cognee/tests/unit/modules/weave
+          cognee/tests/unit/api/v1/weave/test_internal_auth.py
+          --timeout=300 --timeout-method=thread
+      - name: Build wheel and source distribution
+        run: uv build
+
+  postgres-isolation:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.6-pg17-bookworm
+        env:
+          POSTGRES_USER: cognee
+          POSTGRES_PASSWORD: cognee
+          POSTGRES_DB: cognee_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cognee -d cognee_db"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ENV: dev
+      ENABLE_BACKEND_ACCESS_CONTROL: "true"
+      DB_PROVIDER: postgres
+      DB_HOST: 127.0.0.1
+      DB_PORT: "5432"
+      DB_USERNAME: cognee
+      DB_PASSWORD: cognee
+      DB_NAME: cognee_db
+      VECTOR_DB_PROVIDER: pgvector
+      VECTOR_DATASET_DATABASE_HANDLER: pgvector_shared
+      VECTOR_DB_HOST: 127.0.0.1
+      VECTOR_DB_PORT: "5432"
+      VECTOR_DB_USERNAME: cognee
+      VECTOR_DB_PASSWORD: cognee
+      VECTOR_DB_NAME: cognee_db
+      GRAPH_DATABASE_PROVIDER: postgres_demo
+      GRAPH_DATASET_DATABASE_HANDLER: postgres_graph_shared
+      GRAPH_DATABASE_HOST: 127.0.0.1
+      GRAPH_DATABASE_PORT: "5432"
+      GRAPH_DATABASE_USERNAME: cognee
+      GRAPH_DATABASE_PASSWORD: cognee
+      GRAPH_DATABASE_NAME: cognee_db
+      COGNEE_SKIP_CONNECTION_TEST: "true"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.11"
+          enable-cache: true
+      - name: Install locked Postgres dependencies
+        run: uv sync --locked --dev --extra postgres
+      - name: Postgres tenant, index, recall, and deletion gates
+        run: >-
+          uv run pytest
+          cognee/tests/e2e/postgres/test_shared_schema_isolation.py
+          cognee/tests/e2e/postgres/test_shared_schema_concurrency.py
+          cognee/tests/e2e/postgres/test_tenant_graph_retrieval.py
+          cognee/tests/e2e/postgres/test_pgvector_hnsw_plan.py
+          cognee/tests/e2e/postgres/test_weave_exact_sha_indexing.py
+          cognee/tests/e2e/postgres/test_weave_hybrid_recall.py
+          cognee/tests/e2e/postgres/test_weave_surface_isolation.py
+          --timeout=300 --timeout-method=thread -v
+
+  parity-and-security:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.11"
+          enable-cache: true
+      - name: Install locked Postgres dependencies
+        run: uv sync --locked --dev --extra postgres
+      - name: Run local high-confidence secret scan
+        run: scripts/weave-secret-scan.sh
+      - name: Run full image, isolation, performance, and restore parity
+        run: scripts/weave-parity.sh

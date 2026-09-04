@@ -15,6 +15,15 @@ echo "Debug port: $DEBUG_PORT"
 echo "HTTP port: $HTTP_PORT"
 echo "Bind address: $BIND_ADDRESS"
 
+if [ "${WEAVE_STRICT_MODE:-false}" = "true" ]; then
+    echo "Validating strict Cognee Weave runtime..."
+    python - <<'PYTHON'
+from cognee.modules.weave.config import validate_weave_runtime_environment
+
+validate_weave_runtime_environment()
+PYTHON
+fi
+
 # Run migrations through cognee's own migration system rather than raw
 # alembic: it knows a fresh database from an existing one (fresh -> create
 # directories + build the schema from the models + `alembic stamp head`;

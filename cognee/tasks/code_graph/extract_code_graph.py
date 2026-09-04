@@ -4,6 +4,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from pathlib import PurePosixPath
 import posixpath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from uuid import NAMESPACE_OID, UUID, uuid5
@@ -30,6 +31,7 @@ from cognee.tasks.code_graph.models import (
     CodeFileReference,
     ExternalDependency,
     StorageResource,
+    RepositoryProvenance,
 )
 
 if TYPE_CHECKING:
@@ -72,17 +74,29 @@ def fact_node_id(repo: str, kind: str, name: str) -> UUID:
     return uuid5(NAMESPACE_OID, key)
 
 
-def _fact_repo(fact: dict, fallback_repo: str) -> str:
+def _fact_repo(
+    fact: dict,
+    fallback_repo: str,
+    repository_provenance: Optional[RepositoryProvenance] = None,
+) -> str:
+    if repository_provenance is not None:
+        return repository_provenance.repository_identity
     repo = fact.get("repo")
     return repo if isinstance(repo, str) and repo else fallback_repo
 
 
-def _resolve_fallback_repo(facts: List[dict], repo_path: Optional[Union[str, Path]]) -> str:
+def _resolve_fallback_repo(
+    facts: List[dict],
+    repo_path: Optional[Union[str, Path]],
+    repository_provenance: Optional[RepositoryProvenance] = None,
+) -> str:
     """Fallback repo for facts without a 'repo' field.
 
     Must be identical for map_facts_to_data_points and build_code_graph_edges,
     otherwise edge endpoint ids would not match node ids.
     """
+    if repository_provenance is not None:
+        return repository_provenance.repository_identity
     default = Path(repo_path).name if repo_path else "unknown"
     return next(
         (fact["repo"] for fact in facts if isinstance(fact.get("repo"), str) and fact["repo"]),
@@ -105,18 +119,34 @@ def _describe_fact(kind: str, props: dict) -> Optional[str]:
 def map_facts_to_data_points(
     facts: List[dict],
     repo_path: Optional[Union[str, Path]] = None,
+    repository_provenance: Optional[RepositoryProvenance] = None,
 ) -> List[DataPoint]:
     """Map parsed enola facts to DataPoints, prepending one CodeRepository per repo."""
-    fallback_repo = _resolve_fallback_repo(facts, repo_path)
+    fallback_repo = _resolve_fallback_repo(facts, repo_path, repository_provenance)
 
     repositories: Dict[str, CodeRepository] = {}
 
     def _get_repository(repo: str) -> CodeRepository:
         if repo not in repositories:
+            provenance_fields = {}
+            durable_path = str(repo_path) if repo_path and repo == fallback_repo else repo
+            if repository_provenance is not None:
+                durable_path = repository_provenance.source_ref
+                provenance_fields = {
+                    "organization_id": repository_provenance.organization_id,
+                    "github_repository_id": repository_provenance.github_repository_id,
+                    "repository_owner": repository_provenance.repository_owner,
+                    "repository_name": repository_provenance.repository_name,
+                    "indexed_sha": repository_provenance.indexed_sha,
+                    "source_path": repository_provenance.source_ref,
+                    "pipeline_version": repository_provenance.pipeline_version,
+                    "extraction_version": repository_provenance.extraction_version,
+                }
             repositories[repo] = CodeRepository(
                 id=fact_node_id(repo, "repository", repo),
                 name=repo,
-                path=str(repo_path) if repo_path and repo == fallback_repo else repo,
+                path=durable_path,
+                **provenance_fields,
             )
         return repositories[repo]
 
@@ -138,7 +168,7 @@ def map_facts_to_data_points(
             logger.warning("Skipping fact with unknown kind or missing name: %s", fact)
             continue
 
-        repo = _fact_repo(fact, fallback_repo)
+        repo = _fact_repo(fact, fallback_repo, repository_provenance)
         node_id = fact_node_id(repo, kind, name)
         if node_id in seen_ids:
             # Same-named facts of the same kind collapse into one node (see
@@ -171,6 +201,25 @@ def map_facts_to_data_points(
             "fact_properties": props,
             "part_of": _get_repository(repo),
         }
+        if repository_provenance is not None:
+            source_path = None
+            if isinstance(file_path, str) and file_path:
+                candidate = PurePosixPath(file_path)
+                if not candidate.is_absolute() and ".." not in candidate.parts:
+                    source_path = candidate.as_posix()
+            fields.update(
+                {
+                    "fact_identity": f"{kind}:{name}",
+                    "organization_id": repository_provenance.organization_id,
+                    "github_repository_id": repository_provenance.github_repository_id,
+                    "repository_owner": repository_provenance.repository_owner,
+                    "repository_name": repository_provenance.repository_name,
+                    "indexed_sha": repository_provenance.indexed_sha,
+                    "source_path": source_path,
+                    "pipeline_version": repository_provenance.pipeline_version,
+                    "extraction_version": repository_provenance.extraction_version,
+                }
+            )
         if model is CodeSymbol:
             fields["symbol_kind"] = props.get("symbol_kind")
 
@@ -221,6 +270,7 @@ def _short_target_names(name: str) -> set:
 def build_code_graph_edges(
     facts: List[dict],
     repo_path: Optional[Union[str, Path]] = None,
+    repository_provenance: Optional[RepositoryProvenance] = None,
 ) -> Tuple[List[tuple], int]:
     """Resolve typed relations between facts into explicit graph edge tuples.
 
@@ -229,7 +279,7 @@ def build_code_graph_edges(
     repo_path must be the same value given to map_facts_to_data_points so that
     edge endpoint ids match the node ids. Returns (edges, skipped_count).
     """
-    fallback_repo = _resolve_fallback_repo(facts, repo_path)
+    fallback_repo = _resolve_fallback_repo(facts, repo_path, repository_provenance)
 
     valid_facts = []
     name_index: Dict[str, set] = {}
@@ -242,7 +292,7 @@ def build_code_graph_edges(
         name = fact.get("name")
         if not _is_mappable_fact(kind, name):
             continue
-        repo = _fact_repo(fact, fallback_repo)
+        repo = _fact_repo(fact, fallback_repo, repository_provenance)
         valid_facts.append((fact, repo))
         name_index.setdefault(name, set()).add((repo, kind))
         for short_form in _short_target_names(name):
@@ -455,6 +505,7 @@ async def extract_code_graph(
     repo_path: Optional[Union[str, Path]] = None,
     snapshot_dir: Optional[Union[str, Path]] = None,
     timeout: float = 600.0,
+    repository_provenance: Optional[RepositoryProvenance] = None,
 ) -> List[DataPoint]:
     """Run enola on repo_path (or reuse an existing snapshot) and return DataPoints.
 
@@ -483,7 +534,7 @@ async def extract_code_graph(
 
     snapshot_id = snapshot_identity(snapshot_dir, receipt)
     if snapshot_id is not None:
-        fallback_repo = _resolve_fallback_repo(facts, repo_path)
+        fallback_repo = _resolve_fallback_repo(facts, repo_path, repository_provenance)
         try:
             stored_id = await _stored_snapshot_identity(fallback_repo)
         except Exception as error:
@@ -498,7 +549,11 @@ async def extract_code_graph(
             )
             return []
 
-    data_points = map_facts_to_data_points(facts, repo_path=repo_path)
+    data_points = map_facts_to_data_points(
+        facts,
+        repo_path=repo_path,
+        repository_provenance=repository_provenance,
+    )
     logger.info("Mapped %d enola fact(s) to %d data point(s).", len(facts), len(data_points))
     return data_points
 
@@ -535,24 +590,36 @@ async def _stored_snapshot_identity(repo: str) -> Optional[str]:
     return None
 
 
-def _snapshot_repos(facts: List[dict], fallback_repo: str) -> set:
+def _snapshot_repos(
+    facts: List[dict],
+    fallback_repo: str,
+    repository_provenance: Optional[RepositoryProvenance] = None,
+) -> set:
     """Every repo this snapshot covers (multi-repo snapshots have several)."""
     repos = {fallback_repo}
     for fact in facts:
         if _is_mappable_fact(fact.get("kind"), fact.get("name")):
-            repos.add(_fact_repo(fact, fallback_repo))
+            repos.add(_fact_repo(fact, fallback_repo, repository_provenance))
     return repos
 
 
-def _current_code_node_ids(facts: List[dict], fallback_repo: str) -> set:
+def _current_code_node_ids(
+    facts: List[dict],
+    fallback_repo: str,
+    repository_provenance: Optional[RepositoryProvenance] = None,
+) -> set:
     """String node ids the snapshot derives: every mappable fact + repository nodes."""
     ids = set()
     for fact in facts:
         kind = fact.get("kind")
         name = fact.get("name")
         if _is_mappable_fact(kind, name):
-            ids.add(str(fact_node_id(_fact_repo(fact, fallback_repo), kind, name)))
-    for repo in _snapshot_repos(facts, fallback_repo):
+            ids.add(
+                str(
+                    fact_node_id(_fact_repo(fact, fallback_repo, repository_provenance), kind, name)
+                )
+            )
+    for repo in _snapshot_repos(facts, fallback_repo, repository_provenance):
         ids.add(str(fact_node_id(repo, "repository", repo)))
     return ids
 
@@ -687,6 +754,7 @@ async def add_code_graph_edges(
     repo_path: Optional[Union[str, Path]] = None,
     snapshot_dir: Optional[Union[str, Path]] = None,
     ctx: Optional["PipelineContext"] = None,
+    repository_provenance: Optional[RepositoryProvenance] = None,
 ) -> List[DataPoint]:
     """Insert typed relation edges (calls/imports/...) after add_data_points ran.
 
@@ -710,7 +778,11 @@ async def add_code_graph_edges(
         snapshot_dir = Path(repo_path) / ".enola"
 
     facts, receipt = parse_enola_snapshot(snapshot_dir)
-    edges, skipped = build_code_graph_edges(facts, repo_path=repo_path)
+    edges, skipped = build_code_graph_edges(
+        facts,
+        repo_path=repo_path,
+        repository_provenance=repository_provenance,
+    )
     logger.info("Resolved %d code graph edge(s), skipped %d.", len(edges), skipped)
 
     try:
@@ -770,7 +842,13 @@ async def add_code_graph_edges(
         # what previous ingestions derived that this snapshot no longer does.
         # Runs even with zero edges — a shrunken repo still needs its sweep.
         nodes_removed, edges_removed, samples_removed = await _sweep_stale_code_graph(
-            graph_engine, facts, edges, repo_path, existing_nodes, existing_edge_keys
+            graph_engine,
+            facts,
+            edges,
+            repo_path,
+            existing_nodes,
+            existing_edge_keys,
+            repository_provenance,
         )
 
         snapshot_id = snapshot_identity(snapshot_dir, receipt)
@@ -787,7 +865,14 @@ async def add_code_graph_edges(
 
         # Stamp last: only a load that added, swept, and got here may record
         # its snapshot id, so a crashed run can never be skipped-past later.
-        await _stamp_snapshot_identity(graph_engine, facts, repo_path, snapshot_id, delta)
+        await _stamp_snapshot_identity(
+            graph_engine,
+            facts,
+            repo_path,
+            snapshot_id,
+            delta,
+            repository_provenance,
+        )
     finally:
         # Direct edge writes, sweeps, and ledger writes may partially succeed.
         _invalidate_code_graph_snapshot(ctx)
@@ -801,6 +886,7 @@ async def _sweep_stale_code_graph(
     repo_path: Optional[Union[str, Path]],
     existing_nodes: List[tuple],
     existing_edge_keys: set,
+    repository_provenance: Optional[RepositoryProvenance] = None,
 ) -> Tuple[int, int, List[str]]:
     """Remove code graph nodes/edges no longer derivable from the snapshot.
 
@@ -814,9 +900,9 @@ async def _sweep_stale_code_graph(
     """
     from cognee.infrastructure.databases.provenance.delete_data import EdgeIdentity
 
-    fallback_repo = _resolve_fallback_repo(facts, repo_path)
-    snapshot_repos = _snapshot_repos(facts, fallback_repo)
-    current_ids = _current_code_node_ids(facts, fallback_repo)
+    fallback_repo = _resolve_fallback_repo(facts, repo_path, repository_provenance)
+    snapshot_repos = _snapshot_repos(facts, fallback_repo, repository_provenance)
+    current_ids = _current_code_node_ids(facts, fallback_repo, repository_provenance)
 
     code_types = {model.__name__ for model in KIND_TO_MODEL.values()} | {CodeRepository.__name__}
     stale_node_ids = []
@@ -851,7 +937,7 @@ async def _sweep_stale_code_graph(
         name = fact.get("name")
         if not _is_mappable_fact(kind, name):
             continue
-        repo = _fact_repo(fact, fallback_repo)
+        repo = _fact_repo(fact, fallback_repo, repository_provenance)
         expected_edge_keys.add(
             (
                 str(fact_node_id(repo, kind, name)),
@@ -881,20 +967,40 @@ async def _stamp_snapshot_identity(
     repo_path: Optional[Union[str, Path]],
     snapshot_id: Optional[str],
     delta: Optional[dict] = None,
+    repository_provenance: Optional[RepositoryProvenance] = None,
 ) -> None:
     """Record the loaded snapshot's identity and delta on the repository nodes."""
     if snapshot_id is None:
         return
-    fallback_repo = _resolve_fallback_repo(facts, repo_path)
+    fallback_repo = _resolve_fallback_repo(facts, repo_path, repository_provenance)
+    provenance_fields = {}
+    if repository_provenance is not None:
+        provenance_fields = {
+            "organization_id": repository_provenance.organization_id,
+            "github_repository_id": repository_provenance.github_repository_id,
+            "repository_owner": repository_provenance.repository_owner,
+            "repository_name": repository_provenance.repository_name,
+            "indexed_sha": repository_provenance.indexed_sha,
+            "source_path": repository_provenance.source_ref,
+            "pipeline_version": repository_provenance.pipeline_version,
+            "extraction_version": repository_provenance.extraction_version,
+        }
     repositories = [
         CodeRepository(
             id=fact_node_id(repo, "repository", repo),
             name=repo,
-            path=str(repo_path) if repo_path and repo == fallback_repo else repo,
+            path=(
+                repository_provenance.source_ref
+                if repository_provenance is not None
+                else str(repo_path)
+                if repo_path and repo == fallback_repo
+                else repo
+            ),
             last_snapshot_id=snapshot_id,
             last_delta=delta,
+            **provenance_fields,
         )
-        for repo in sorted(_snapshot_repos(facts, fallback_repo))
+        for repo in sorted(_snapshot_repos(facts, fallback_repo, repository_provenance))
     ]
     await graph_engine.add_nodes(repositories)
 
@@ -904,6 +1010,7 @@ def get_code_graph_tasks(
     snapshot_dir: Optional[Union[str, Path]] = None,
     timeout: float = 600.0,
     index_vectors: bool = False,
+    repository_provenance: Optional[RepositoryProvenance] = None,
 ) -> List[Task]:
     """Build the ordered task list for the enola code graph pipeline.
 
@@ -918,9 +1025,15 @@ def get_code_graph_tasks(
             repo_path=repo_path,
             snapshot_dir=snapshot_dir,
             timeout=timeout,
+            repository_provenance=repository_provenance,
         ),
         # LOAD: persist graph nodes; vector indexing is explicitly opt-in
         Task(add_code_graph_data_points, graph_only=not index_vectors),
         # LOAD: persist the typed relations as explicit graph edges
-        Task(add_code_graph_edges, repo_path=repo_path, snapshot_dir=snapshot_dir),
+        Task(
+            add_code_graph_edges,
+            repo_path=repo_path,
+            snapshot_dir=snapshot_dir,
+            repository_provenance=repository_provenance,
+        ),
     ]

@@ -1,0 +1,61 @@
+name: Cognee Weave Upstream Sync
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: weave-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  propose:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Resolve exact upstream revision
+        id: upstream
+        run: |
+          git remote add upstream https://github.com/topoteretes/cognee.git
+          git fetch --no-tags upstream main
+          upstream_sha="$(git rev-parse upstream/main)"
+          echo "sha=${upstream_sha}" >> "${GITHUB_OUTPUT}"
+          if git merge-base --is-ancestor "${upstream_sha}" HEAD; then
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "changed=true" >> "${GITHUB_OUTPUT}"
+          fi
+      - name: Push exact upstream proposal branch
+        if: steps.upstream.outputs.changed == 'true'
+        env:
+          UPSTREAM_SHA: ${{ steps.upstream.outputs.sha }}
+        run: |
+          branch="sync/upstream-${UPSTREAM_SHA:0:12}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch --create "${branch}" origin/main
+          git merge --no-edit "${UPSTREAM_SHA}"
+          git push --force-with-lease origin "HEAD:refs/heads/${branch}"
+          echo "branch=${branch}" >> "${GITHUB_ENV}"
+      - name: Open manual-review pull request
+        if: steps.upstream.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM_SHA: ${{ steps.upstream.outputs.sha }}
+        run: |
+          existing="$(gh pr list --head "${branch}" --state open --json number --jq '.[0].number // empty')"
+          if [ -z "${existing}" ]; then
+            gh pr create \
+              --base main \
+              --head "${branch}" \
+              --title "chore: sync Cognee upstream ${UPSTREAM_SHA:0:12}" \
+              --body "Proposes exact upstream SHA \`${UPSTREAM_SHA}\`. This PR must pass the Cognee Weave tenant, provenance, migration, Postgres, and security gates and receive manual review. It must not be auto-merged."
+          fi

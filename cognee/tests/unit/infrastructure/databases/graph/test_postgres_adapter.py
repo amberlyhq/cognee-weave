@@ -18,10 +18,16 @@ if importlib.util.find_spec("asyncpg") is None:
     _created_asyncpg_stub = True
 
 from cognee.infrastructure.databases.graph.postgres_demo.adapter import (  # noqa: E402
+    MAX_NEIGHBORHOOD_DEPTH,
+    MAX_NEIGHBORHOOD_EDGES,
+    MAX_NEIGHBORHOOD_FAN_OUT,
+    MAX_NEIGHBORHOOD_NODES,
+    MAX_NEIGHBORHOOD_TIMEOUT_MS,
     _component_sizes,
     _prepare_edge_rows,
     _prepare_node_rows,
     _select_nodeset_neighbor_ids,
+    _validate_neighborhood_bounds,
 )
 
 if _created_asyncpg_stub:
@@ -141,3 +147,59 @@ def test_nodeset_neighbor_selection_supports_or_and_missing_primaries():
 def test_nodeset_neighbor_selection_rejects_unknown_operator():
     with pytest.raises(ValueError, match="must be 'OR' or 'AND'"):
         _select_nodeset_neighbor_ids({"a"}, [("a", "b")], "XOR")
+
+
+def test_neighborhood_bounds_accept_safe_values():
+    assert _validate_neighborhood_bounds(
+        depth=2,
+        fan_out=25,
+        max_nodes=200,
+        max_edges=400,
+        statement_timeout_ms=1000,
+    ) == (2, 25, 200, 400, 1000)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "maximum"),
+    [
+        ("depth", -1, MAX_NEIGHBORHOOD_DEPTH),
+        ("depth", MAX_NEIGHBORHOOD_DEPTH + 1, MAX_NEIGHBORHOOD_DEPTH),
+        ("fan_out", 0, MAX_NEIGHBORHOOD_FAN_OUT),
+        ("fan_out", MAX_NEIGHBORHOOD_FAN_OUT + 1, MAX_NEIGHBORHOOD_FAN_OUT),
+        ("max_nodes", 0, MAX_NEIGHBORHOOD_NODES),
+        ("max_nodes", MAX_NEIGHBORHOOD_NODES + 1, MAX_NEIGHBORHOOD_NODES),
+        ("max_edges", 0, MAX_NEIGHBORHOOD_EDGES),
+        ("max_edges", MAX_NEIGHBORHOOD_EDGES + 1, MAX_NEIGHBORHOOD_EDGES),
+        ("statement_timeout_ms", 0, MAX_NEIGHBORHOOD_TIMEOUT_MS),
+        (
+            "statement_timeout_ms",
+            MAX_NEIGHBORHOOD_TIMEOUT_MS + 1,
+            MAX_NEIGHBORHOOD_TIMEOUT_MS,
+        ),
+    ],
+)
+def test_neighborhood_bounds_reject_negative_zero_and_oversized_values(
+    field, value, maximum
+):
+    values = {
+        "depth": 2,
+        "fan_out": 25,
+        "max_nodes": 200,
+        "max_edges": 400,
+        "statement_timeout_ms": 1000,
+    }
+    values[field] = value
+
+    with pytest.raises(ValueError, match=field):
+        _validate_neighborhood_bounds(**values)
+
+
+def test_neighborhood_bounds_reject_boolean_values():
+    with pytest.raises(ValueError, match="fan_out"):
+        _validate_neighborhood_bounds(
+            depth=2,
+            fan_out=True,
+            max_nodes=200,
+            max_edges=400,
+            statement_timeout_ms=1000,
+        )

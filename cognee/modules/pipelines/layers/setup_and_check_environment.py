@@ -1,10 +1,12 @@
-import os
 import asyncio
+import os
+
 from cognee.context_global_variables import (
     graph_db_config as context_graph_db_config,
+)
+from cognee.context_global_variables import (
     vector_db_config as context_vector_db_config,
 )
-
 from cognee.infrastructure.databases.relational import (
     create_db_and_tables as create_relational_db_and_tables,
 )
@@ -29,8 +31,9 @@ async def setup_and_check_environment(
     if graph_db_config:
         context_graph_db_config.set(graph_db_config)
 
-    # Create tables for databases
-    await create_relational_db_and_tables()
+    # Strict Weave runs global DDL only in the dedicated migration service.
+    if os.getenv("WEAVE_STRICT_MODE", "false").lower() != "true":
+        await create_relational_db_and_tables()
     await create_pgvector_db_and_tables()
 
     global _first_run_done
@@ -57,8 +60,8 @@ async def setup_and_check_environment(
             else:
                 from cognee.infrastructure.llm.utils import (
                     determine_embedding_dimensions,
-                    test_llm_connection,
                     test_embedding_connection,
+                    test_llm_connection,
                 )
 
                 await test_llm_connection()

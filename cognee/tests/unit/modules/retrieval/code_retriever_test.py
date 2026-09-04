@@ -14,7 +14,7 @@ from cognee.modules.retrieval.code_retriever import (
     _code_graph_snapshot_cache_key,
     invalidate_code_graph_snapshot_cache,
 )
-from cognee.context_global_variables import current_dataset_id
+from cognee.context_global_variables import current_dataset_id, strict_database_scope
 
 
 WIDGET_ID = UUID("00000000-0000-0000-0000-000000000001")
@@ -618,6 +618,38 @@ async def test_graph_snapshot_cache_isolated_by_dataset_and_database():
         current_dataset_id.reset(dataset_token)
 
     assert engine.get_filtered_graph_data.await_count == 3
+
+
+def test_graph_snapshot_cache_identity_includes_postgres_schema():
+    base_config = {
+        "graph_database_provider": "postgres_demo",
+        "graph_database_name": "shared",
+    }
+
+    first = _code_graph_snapshot_cache_key(
+        dataset_id="dataset-a",
+        graph_config={**base_config, "graph_database_schema": "ds_first"},
+    )
+    second = _code_graph_snapshot_cache_key(
+        dataset_id="dataset-a",
+        graph_config={**base_config, "graph_database_schema": "ds_second"},
+    )
+
+    assert first != second
+
+
+@pytest.mark.asyncio
+async def test_code_retriever_fails_closed_without_dataset_in_strict_scope():
+    dataset_token = current_dataset_id.set(None)
+    strict_token = strict_database_scope.set(True)
+    try:
+        with patch("cognee.modules.retrieval.code_retriever.get_graph_engine") as global_graph:
+            with pytest.raises(CodeSearchValidationError, match="active dataset"):
+                await CodeRetriever(config={"operation": "query_facts"}).get_retrieved_objects("")
+        global_graph.assert_not_called()
+    finally:
+        strict_database_scope.reset(strict_token)
+        current_dataset_id.reset(dataset_token)
 
 
 @pytest.mark.asyncio

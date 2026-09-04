@@ -58,6 +58,13 @@ Cognee is the open-source AI memory platform that gives AI agents persistent lon
 </p>
 </div>
 
+> [!NOTE]
+> This repository is **Cognee Weave**, Amberly's Apache-2.0 fork of Cognee.
+> It hardens Cognee's Postgres-only, tenant-scoped memory and code-context
+> path. The fork stays close to upstream; see [UPSTREAM.md](UPSTREAM.md) for
+> the exact fork point and synchronization policy. The documentation below is
+> retained from Cognee and continues to credit the upstream project.
+
 📄 Read the research paper: [Optimizing the Interface Between Knowledge Graphs and LLMs for Complex Reasoning](https://arxiv.org/abs/2505.24478) — Markovic et al., 2025
 
 

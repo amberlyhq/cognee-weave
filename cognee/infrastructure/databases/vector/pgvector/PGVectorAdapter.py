@@ -1,11 +1,10 @@
 import asyncio
-from typing import Any, Dict, List, Optional, get_type_hints
+from typing import Any, Dict, List, Optional
 from uuid import UUID
-from sqlalchemy.inspection import inspect
-from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy import JSON, Column, Table, select, delete, MetaData, func, text
+from sqlalchemy import JSON, Column, Table, Uuid, select, delete, MetaData, func, text, inspect
 from sqlalchemy import exc
+from sqlalchemy.schema import CreateTable
 from sqlalchemy.exc import DBAPIError, ProgrammingError
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 from asyncpg import DeadlockDetectedError, DuplicateTableError, UniqueViolationError
@@ -21,13 +20,13 @@ from cognee.infrastructure.databases.exceptions import MissingQueryParameterErro
 from cognee.context_global_variables import backend_access_control_enabled
 from cognee.modules.graph.methods.sanitize_relational_payload import sanitize_relational_payload
 
-from ...relational.ModelBase import Base
 from ...relational.sqlalchemy.SqlAlchemyAdapter import SQLAlchemyAdapter
 from ..models.ScoredResult import ScoredResult
 from ..exceptions import CollectionNotFoundError
 from ..vector_db_interface import VectorDBInterface
 from ..embeddings.EmbeddingEngine import EmbeddingEngine
 from .serialize_data import serialize_data
+from .indexes import ensure_hnsw_cosine_index
 
 logger = get_logger("PGVectorAdapter")
 QUERY_BATCH_SIZE = 1000
@@ -93,6 +92,7 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
         self.schema: str = schema or ""
         self.VECTOR_DB_LOCK = asyncio.Lock()
         self._write_locks: dict[str, asyncio.Lock] = {}
+        self._hnsw_indexed_collections: set[str] = set()
         self._metadata = MetaData()
         # True when this adapter created its own engine and must dispose it on close().
         # False when the engine is borrowed from the relational adapter.
@@ -268,8 +268,17 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
 
             - bool: Returns True if the collection exists, False otherwise.
         """
-        if collection_name in self._metadata.tables:
+        metadata_key = f"{self.schema}.{collection_name}" if self.schema else collection_name
+        if metadata_key in self._metadata.tables:
             return True
+
+        if self.schema:
+            async with self.engine.begin() as connection:
+                return await connection.run_sync(
+                    lambda sync_connection: inspect(sync_connection).has_table(
+                        collection_name, schema=self.schema
+                    )
+                )
 
         try:
             async with self.engine.begin() as connection:
@@ -288,51 +297,62 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
     )
     async def create_collection(self, collection_name: str, payload_schema=None):
         """Create the pgvector table for `collection_name` if it does not already exist."""
-        data_point_types = get_type_hints(DataPoint)
         vector_size = self.embedding_engine.get_vector_size()
 
         if not await self.has_collection(collection_name):
             async with self.VECTOR_DB_LOCK:
                 if not await self.has_collection(collection_name):
-
-                    class PGVectorDataPoint(Base):
-                        """
-                        Represent a point in a vector data space with associated data and vector representation.
-
-                        This class inherits from Base and is associated with a database table defined by
-                        __tablename__. It maintains the following public methods and instance variables:
-
-                        - __init__(self, id, payload, vector): Initializes a new PGVectorDataPoint instance.
-
-                        Instance variables:
-                        - id: Identifier for the data point, defined by data_point_types.
-                        - payload: JSON data associated with the data point.
-                        - vector: Vector representation of the data point, with size defined by vector_size.
-                        """
-
-                        __tablename__ = collection_name
-                        __table_args__ = {"extend_existing": True}
-                        # PGVector requires one column to be the primary key
-                        id: Mapped[data_point_types["id"]] = mapped_column(primary_key=True)
-                        payload = Column(JSON)
-                        vector = Column(self.Vector(vector_size))
-
-                        def __init__(self, id, payload, vector):
-                            """Initialize the pgvector row with id, JSON payload, and vector."""
-                            self.id = id
-                            self.payload = payload
-                            self.vector = vector
+                    collection_table = Table(
+                        collection_name,
+                        MetaData(),
+                        Column("id", Uuid(as_uuid=True), primary_key=True),
+                        Column("payload", JSON),
+                        Column("vector", self.Vector(vector_size)),
+                        schema=self.schema or None,
+                    )
 
                     async with self.engine.begin() as connection:
-                        if len(Base.metadata.tables.keys()) > 0:
-                            await connection.run_sync(
-                                Base.metadata.create_all, tables=[PGVectorDataPoint.__table__]
-                            )
+                        # ``checkfirst`` can see a same-named table later in
+                        # search_path (usually public) and incorrectly skip a
+                        # tenant schema. The identifier here is explicitly
+                        # schema-qualified; IF NOT EXISTS handles concurrent
+                        # creators without consulting search_path.
+                        await connection.execute(CreateTable(collection_table, if_not_exists=True))
                     # Reflect AFTER the DDL transaction commits so
                     # _metadata is never populated for a table that
                     # might be rolled back.
                     async with self.engine.begin() as connection:
-                        await connection.run_sync(self._metadata.reflect, only=[collection_name])
+                        if self.schema:
+                            await connection.run_sync(
+                                lambda sync_connection: Table(
+                                    collection_name,
+                                    self._metadata,
+                                    schema=self.schema,
+                                    autoload_with=sync_connection,
+                                )
+                            )
+                        else:
+                            await connection.run_sync(
+                                self._metadata.reflect, only=[collection_name]
+                            )
+
+        if collection_name not in self._hnsw_indexed_collections:
+            async with self.VECTOR_DB_LOCK:
+                if collection_name not in self._hnsw_indexed_collections:
+                    created_index = await ensure_hnsw_cosine_index(
+                        self.engine,
+                        collection_name,
+                        vector_size=vector_size,
+                        schema=self.schema or None,
+                    )
+                    if created_index is None:
+                        logger.warning(
+                            "Skipping HNSW index for %s: vector dimension %s exceeds pgvector's "
+                            "2000-dimension HNSW limit",
+                            collection_name,
+                            vector_size,
+                        )
+                    self._hnsw_indexed_collections.add(collection_name)
 
     @retry(
         retry=retry_if_exception_type((DeadlockDetectedError, DBAPIError)),
@@ -341,60 +361,36 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
     )
     async def create_data_points(self, collection_name: str, data_points: List[DataPoint]):
         """Upsert DataPoints into `collection_name`, merging belongs_to_set on conflict."""
-        data_point_types = get_type_hints(DataPoint)
-        if not await self.has_collection(collection_name):
-            await self.create_collection(
-                collection_name=collection_name,
-                payload_schema=type(data_points[0]),
-            )
+        await self.create_collection(
+            collection_name=collection_name,
+            payload_schema=type(data_points[0]),
+        )
 
         data_vectors = await self.embed_data(
             [DataPoint.get_embeddable_data(data_point) for data_point in data_points]
         )
 
         vector_size = self.embedding_engine.get_vector_size()
-
-        class PGVectorDataPoint(Base):
-            """
-            Represents a data point in a PGVector database. This class maps to a table defined by
-            the SQLAlchemy ORM.
-
-            It contains the following public instance variables:
-            - id: An identifier for the data point.
-            - payload: A JSON object containing additional data related to the data point.
-            - vector: A vector representation of the data point, configured to the specified size.
-            """
-
-            __tablename__ = collection_name
-            __table_args__ = {"extend_existing": True}
-            # PGVector requires one column to be the primary key
-            id: Mapped[data_point_types["id"]] = mapped_column(primary_key=True)
-            payload = Column(JSON)
-            vector = Column(self.Vector(vector_size))
-
-            def __init__(self, id, payload, vector):
-                self.id = id
-                self.payload = payload
-                self.vector = vector
-
-        pgvector_data_points = []
+        collection_table = Table(
+            collection_name,
+            MetaData(),
+            Column("id", Uuid(as_uuid=True), primary_key=True),
+            Column("payload", JSON),
+            Column("vector", self.Vector(vector_size)),
+            schema=self.schema or None,
+        )
+        point_dicts = []
 
         for data_index, data_point in enumerate(data_points):
-            pgvector_data_points.append(
-                PGVectorDataPoint(
-                    id=data_point.id,
-                    vector=data_vectors[data_index],
+            point_dicts.append(
+                {
+                    "id": data_point.id,
+                    "vector": data_vectors[data_index],
                     # Strip NUL bytes: the json column accepts \u0000 on insert, but
                     # the payload::jsonb casts in search/merge queries reject it.
-                    payload=sanitize_relational_payload(serialize_data(data_point.model_dump())),
-                )
+                    "payload": sanitize_relational_payload(serialize_data(data_point.model_dump())),
+                }
             )
-
-        def to_dict(obj):
-            """Dump a mapped PGVectorDataPoint row to a plain column→value dict."""
-            return {
-                column.key: getattr(obj, column.key) for column in inspect(obj).mapper.column_attrs
-            }
 
         # Dedup by id within the batch — with ON CONFLICT DO UPDATE,
         # Postgres raises "cannot affect row a second time" if the same
@@ -405,29 +401,27 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
         # appears on one duplicate isn't dropped (mirrors the in-batch
         # tag merge in Neo4jAdapter.add_nodes).
         deduped_by_id: dict = {}
-        for dp in pgvector_data_points:
-            existing = deduped_by_id.get(dp.id)
+        for point in point_dicts:
+            existing = deduped_by_id.get(point["id"])
             if existing is None:
-                deduped_by_id[dp.id] = dp
+                deduped_by_id[point["id"]] = point
                 continue
-            existing_payload = existing.payload or {}
-            incoming_payload = dp.payload or {}
+            existing_payload = existing["payload"] or {}
+            incoming_payload = point["payload"] or {}
             existing_tags = existing_payload.get("belongs_to_set") or []
             incoming_tags = incoming_payload.get("belongs_to_set") or []
             if existing_tags or incoming_tags:
                 merged_tags = list(dict.fromkeys(list(existing_tags) + list(incoming_tags)))
-                dp.payload = {**incoming_payload, "belongs_to_set": merged_tags}
-            deduped_by_id[dp.id] = dp
-        pgvector_data_points = list(deduped_by_id.values())
-
-        point_dicts = [to_dict(data_point) for data_point in pgvector_data_points]
+                point["payload"] = {**incoming_payload, "belongs_to_set": merged_tags}
+            deduped_by_id[point["id"]] = point
+        point_dicts = list(deduped_by_id.values())
 
         async with self._get_write_lock(collection_name):
             async with self.get_async_session() as session:
                 for start_index in range(0, len(point_dicts), QUERY_BATCH_SIZE):
                     point_batch = point_dicts[start_index : start_index + QUERY_BATCH_SIZE]
-                    insert_statement = insert(PGVectorDataPoint).values(point_batch)
-                    quoted_table = f'"{collection_name}"'
+                    insert_statement = insert(collection_table).values(point_batch)
+                    quoted_table = self.engine.dialect.identifier_preparer.quote(collection_name)
                     merged_payload_expr = text(
                         f"""
                                     jsonb_set(
@@ -445,7 +439,10 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
                     )
                     insert_statement = insert_statement.on_conflict_do_update(
                         index_elements=["id"],
-                        set_={"payload": merged_payload_expr},
+                        set_={
+                            "payload": merged_payload_expr,
+                            "vector": insert_statement.excluded.vector,
+                        },
                     )
                     await session.execute(insert_statement)
                 await session.commit()
@@ -483,19 +480,30 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
         Dynamically loads a table using the given collection name
         with an async engine.
         """
-        if collection_name in self._metadata.tables:
-            return self._metadata.tables[collection_name]
+        metadata_key = f"{self.schema}.{collection_name}" if self.schema else collection_name
+        if metadata_key in self._metadata.tables:
+            return self._metadata.tables[metadata_key]
 
         try:
             async with self.engine.begin() as connection:
-                await connection.run_sync(self._metadata.reflect, only=[collection_name])
+                if self.schema:
+                    await connection.run_sync(
+                        lambda sync_connection: Table(
+                            collection_name,
+                            self._metadata,
+                            schema=self.schema,
+                            autoload_with=sync_connection,
+                        )
+                    )
+                else:
+                    await connection.run_sync(self._metadata.reflect, only=[collection_name])
         except exc.InvalidRequestError:
             raise CollectionNotFoundError(
                 f"Collection '{collection_name}' not found!",
             )
 
-        if collection_name in self._metadata.tables:
-            return self._metadata.tables[collection_name]
+        if metadata_key in self._metadata.tables:
+            return self._metadata.tables[metadata_key]
 
         raise CollectionNotFoundError(
             f"Collection '{collection_name}' not found!",

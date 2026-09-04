@@ -1,60 +1,60 @@
 """FastAPI server for the Cognee API."""
 
 import os
+from contextlib import asynccontextmanager
+from traceback import format_exc
 
 import uvicorn
-from traceback import format_exc
-from contextlib import asynccontextmanager
-from fastapi import Request
-from fastapi import FastAPI, status
+from fastapi import FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
+from fastapi.responses import JSONResponse
 
-from cognee.exceptions import CogneeApiError
-from cognee.shared.logging_utils import get_logger, setup_logging
-from cognee.api.v1.cloud.routers import get_checks_router
-from cognee.api.v1.permissions.routers import get_permissions_router
-from cognee.api.v1.settings.routers import get_settings_router
-from cognee.api.v1.datasets.routers import get_datasets_router
-from cognee.api.v1.cognify.routers import get_cognify_router
-from cognee.api.v1.search.routers import get_search_router
-from cognee.api.v1.ontologies.routers.get_ontology_router import get_ontology_router
-from cognee.api.v1.memify.routers import get_memify_router
+from cognee.api.v1.activity.routers import get_activity_router
 from cognee.api.v1.add.routers import get_add_router
+from cognee.api.v1.agents.routers import get_agents_router
+from cognee.api.v1.api_keys.routers import get_api_key_management_router
+from cognee.api.v1.cloud.routers import get_checks_router
+from cognee.api.v1.cognify.routers import get_cognify_router
+from cognee.api.v1.datasets.routers import get_datasets_router
 from cognee.api.v1.delete.routers import get_delete_router
-from cognee.api.v1.remember.routers import get_remember_router
-from cognee.api.v1.recall.routers import get_recall_router
-from cognee.api.v1.improve.routers import get_improve_router
 from cognee.api.v1.forget.routers import get_forget_router
-from cognee.api.v1.responses.routers import get_responses_router
-from cognee.api.v1.llm.routers import get_llm_router
-from cognee.api.v1.sync.routers import get_sync_router
 from cognee.api.v1.health.routers import get_health_router
-from cognee.api.v1.validate.routers import get_validate_router
+from cognee.api.v1.improve.routers import get_improve_router
+from cognee.api.v1.integrations.routers import get_integrations_router
+from cognee.api.v1.llm.routers import get_llm_router
+from cognee.api.v1.memify.routers import get_memify_router
+from cognee.api.v1.ontologies.routers.get_ontology_router import get_ontology_router
+from cognee.api.v1.permissions.routers import get_permissions_router
+from cognee.api.v1.proposals.routers import get_proposals_router
+from cognee.api.v1.recall.routers import get_recall_router
+from cognee.api.v1.remember.routers import get_remember_router
+from cognee.api.v1.responses.routers import get_responses_router
+from cognee.api.v1.search.routers import get_search_router
+from cognee.api.v1.sessions import get_sessions_router
+from cognee.api.v1.settings.routers import get_settings_router
+from cognee.api.v1.skills.routers import get_skills_router
+from cognee.api.v1.slack.routers import get_slack_channels_router, get_slack_router
+from cognee.api.v1.sync.routers import get_sync_router
 from cognee.api.v1.update.routers import get_update_router
 from cognee.api.v1.users.routers import (
     get_auth_router,
+    get_configuration_router,
     get_register_router,
     get_reset_password_router,
-    get_verify_router,
-    get_users_router,
-    get_visualize_router,
-    get_configuration_router,
     get_user_id_by_email_router,
+    get_users_router,
+    get_verify_router,
+    get_visualize_router,
 )
-from cognee.api.v1.api_keys.routers import get_api_key_management_router
-from cognee.api.v1.agents.routers import get_agents_router
+from cognee.api.v1.validate.routers import get_validate_router
 from cognee.api.v1.visualize.routers import get_schema_router
-from cognee.api.v1.skills.routers import get_skills_router
-from cognee.api.v1.proposals.routers import get_proposals_router
-from cognee.api.v1.activity.routers import get_activity_router
-from cognee.api.v1.sessions import get_sessions_router
-from cognee.api.v1.slack.routers import get_slack_channels_router, get_slack_router
-from cognee.api.v1.integrations.routers import get_integrations_router
+from cognee.api.v1.weave.routers import get_weave_router
+from cognee.exceptions import CogneeApiError
 from cognee.modules.users.methods.get_authenticated_user import REQUIRE_AUTHENTICATION
+from cognee.shared.logging_utils import get_logger, setup_logging
 
 # Ensure application logging is configured for container stdout/stderr
 setup_logging()
@@ -79,6 +79,11 @@ async def lifespan(app: FastAPI):
         await db_engine.create_database()
 
         await run_migrations()
+
+    if os.getenv("WEAVE_STRICT_MODE") == "true":
+        from cognee.modules.weave.rls import assert_weave_runtime_database_security
+
+        await assert_weave_runtime_database_security()
 
     from cognee.modules.users.methods import get_default_user
 
@@ -328,6 +333,7 @@ app.include_router(get_forget_router(), prefix="/api/v1/forget", tags=["forget"]
 app.include_router(get_slack_router(), prefix="/api/v1/slack", tags=["slack"])
 app.include_router(get_slack_channels_router(), prefix="/api/v1/slack", tags=["slack"])
 app.include_router(get_integrations_router(), prefix="/api/v1/integrations", tags=["integrations"])
+app.include_router(get_weave_router(), prefix="/api/v1/weave", tags=["weave-internal"])
 
 
 @app.get("/")
@@ -336,6 +342,34 @@ async def root():
     Root endpoint that returns a welcome message.
     """
     return {"message": "Hello, World, I am alive!"}
+
+
+def _restrict_to_weave_routes(target_app: FastAPI | None = None) -> None:
+    """The dedicated service has no public Cognee/auth surface."""
+
+    target_app = target_app or app
+    allowed_prefixes = {"/", "/health", "/api/v1/weave"}
+
+    def route_identity(route) -> str:
+        path = getattr(route, "path", None)
+        if isinstance(path, str):
+            return path
+        include_context = getattr(route, "include_context", None)
+        prefix = getattr(include_context, "prefix", None)
+        return prefix if isinstance(prefix, str) else ""
+
+    target_app.router.routes = [
+        route
+        for route in target_app.router.routes
+        if any(
+            route_identity(route) == prefix or route_identity(route).startswith(prefix + "/")
+            for prefix in allowed_prefixes
+        )
+    ]
+
+
+if os.getenv("WEAVE_STRICT_MODE") == "true":
+    _restrict_to_weave_routes()
 
 
 def start_api_server(host: str = "0.0.0.0", port: int = 8000):

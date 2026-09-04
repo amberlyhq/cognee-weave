@@ -68,6 +68,18 @@ class EngineCacheOps:
         """Check whether an engine entry exists for this config without creating."""
         return self._factory.cache_contains(*self._key_args(kwargs))
 
+    def evict_matching(self, **criteria) -> int:
+        """Evict every cached engine matching the supplied cache-key fields.
+
+        Use this when one stable isolation field, such as a tenant schema,
+        identifies the engines to remove but the rest of their normalized
+        creation keys may differ. Empty matches are rejected so callers cannot
+        accidentally evict the entire engine cache.
+        """
+        if not criteria:
+            raise ValueError("evict_matching requires at least one criterion")
+        return self._factory.cache_evict_matching(**criteria)
+
     def evict_for_database(self, database_name: str) -> int:
         """Evict every cached engine bound to *database_name*.
 
