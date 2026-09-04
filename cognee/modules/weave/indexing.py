@@ -229,9 +229,7 @@ def _operation_lock_key(namespace: str, identity: bytes) -> int:
 
 
 @asynccontextmanager
-async def weave_operation_lock(
-    organization_id: UUID, github_repository_id: int | None = None
-):
+async def weave_operation_lock(organization_id: UUID, github_repository_id: int | None = None):
     """Serialize tenant mutation, then repository mutation, across processes."""
 
     engine = get_relational_engine()
