@@ -127,9 +127,9 @@ async def test_every_surface_stays_scoped_through_repository_and_organization_de
         with pytest.raises(SurfaceNotFound, match="Resource not found"):
             await export_organization(organization_a, [repository_id])
         with pytest.raises(SurfaceNotFound, match="Resource not found"):
-            await delete_repository(organization_a, repository_id)
+            await delete_repository(organization_a, repository_id, 1)
 
-    await delete_repository(organization_a, 940001)
+    await delete_repository(organization_a, 940001, 2)
     remaining_a = await recall(organization_a, RecallRequest(query="Message", deadline_ms=15000))
     untouched_b = await recall(organization_b, RecallRequest(query="Message", deadline_ms=15000))
     assert {item.github_repository_id for item in remaining_a.repositories} == {940002}
@@ -154,7 +154,11 @@ async def test_every_surface_stays_scoped_through_repository_and_organization_de
             alpha_request,
             _archive(tmp_path, alpha_request.repository_name, alpha_marker),
         )
-    await activate_repository(organization_a, alpha_request.github_repository_id)
+    await activate_repository(organization_a, alpha_request.github_repository_id, 1)
+    still_removed = await recall(organization_a, RecallRequest(query="Message", deadline_ms=15000))
+    assert {item.github_repository_id for item in still_removed.repositories} == {940002}
+    await activate_repository(organization_a, alpha_request.github_repository_id, 3)
+    object.__setattr__(alpha_request, "lifecycle_generation", 3)
     await index_repository_archive(
         alpha_request,
         _archive(tmp_path, alpha_request.repository_name, alpha_marker),
@@ -186,7 +190,9 @@ async def test_every_surface_stays_scoped_through_repository_and_organization_de
     assert graph_engine_cache.is_cached(**graph_config_b)
     assert vector_engine_cache.is_cached(**vector_config_b)
 
-    await delete_organization(organization_a)
+    await delete_organization(organization_a, 2)
+    assert await get_organization_binding(organization_a) is not None
+    await delete_organization(organization_a, 4)
     assert not graph_engine_cache.is_cached(**graph_config_a)
     assert not vector_engine_cache.is_cached(**vector_config_a)
     assert graph_engine_cache.is_cached(**graph_config_b)
@@ -205,9 +211,18 @@ async def test_every_surface_stays_scoped_through_repository_and_organization_de
         )
     assert schema_exists is False
 
-    # Re-provisioning a previously deleted organization reuses its immutable
-    # binding and recreates the dropped shared dataset schema.
-    reprovisioned_a = await provision_organization(organization_a)
+    # Ordinary traffic cannot recreate a tombstoned organization. Only a newer
+    # verified installation.created lifecycle generation can do that.
+    from cognee.modules.weave.organizations import (
+        OrganizationDeletedError,
+        reactivate_organization,
+    )
+
+    with pytest.raises(OrganizationDeletedError):
+        await provision_organization(organization_a)
+    assert await reactivate_organization(organization_a, 3) is None
+    reprovisioned_a = await reactivate_organization(organization_a, 5)
+    assert reprovisioned_a is not None
     assert reprovisioned_a.dataset_id == binding_a.dataset_id
     async with engine.get_async_session() as session:
         recreated_schema_exists = await session.scalar(

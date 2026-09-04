@@ -33,6 +33,14 @@ class OrganizationProvisioningBackend(Protocol):
 
     async def provision(self, organization_id: UUID) -> OrganizationBinding: ...
 
+    async def reactivate(
+        self, organization_id: UUID, lifecycle_generation: int
+    ) -> Optional[OrganizationBinding]: ...
+
+
+class OrganizationDeletedError(RuntimeError):
+    """Normal traffic cannot resurrect a verified organization tombstone."""
+
 
 class OrganizationProvisioner:
     """Serializes provisioning locally; the SQL backend adds a cross-process lock."""
@@ -53,6 +61,14 @@ class OrganizationProvisioner:
             if existing is not None:
                 return existing
             return await self.backend.provision(organization_id)
+
+    async def reactivate(
+        self, organization_id: UUID, lifecycle_generation: int
+    ) -> Optional[OrganizationBinding]:
+        _validate_lifecycle_generation(lifecycle_generation)
+        lock = await self._lock_for(organization_id)
+        async with lock:
+            return await self.backend.reactivate(organization_id, lifecycle_generation)
 
 
 class InMemoryOrganizationProvisioningBackend:
@@ -80,6 +96,16 @@ class InMemoryOrganizationProvisioningBackend:
         self.bindings[organization_id] = binding
         return binding
 
+    async def reactivate(
+        self, organization_id: UUID, lifecycle_generation: int
+    ) -> Optional[OrganizationBinding]:
+        return self.bindings.get(organization_id) or await self.provision(organization_id)
+
+
+def _validate_lifecycle_generation(value: int) -> None:
+    if value <= 0 or value > 2**63 - 1:
+        raise ValueError("lifecycle_generation must be a positive signed 64-bit integer")
+
 
 def _binding_result(binding: WeaveOrganizationBinding) -> OrganizationBinding:
     schema = dataset_schema_name(binding.primary_dataset_id)
@@ -94,7 +120,7 @@ def _binding_result(binding: WeaveOrganizationBinding) -> OrganizationBinding:
 
 
 def _advisory_lock_key(organization_id: UUID) -> int:
-    raw = hashlib.sha256(organization_id.bytes).digest()[:8]
+    raw = hashlib.sha256(b"weave-organization:" + organization_id.bytes).digest()[:8]
     return int.from_bytes(raw, byteorder="big", signed=True)
 
 
@@ -186,22 +212,9 @@ class CogneeOrganizationProvisioningBackend:
             if existing is not None:
                 if existing.deleted_at is None:
                     return _binding_result(existing)
-                service_user = await lock_session.scalar(
-                    select(User).where(User.id == existing.service_user_id)
+                raise OrganizationDeletedError(
+                    "A verified installation.created lifecycle event must reactivate this organization"
                 )
-                database = await lock_session.scalar(
-                    select(DatasetDatabase).where(
-                        DatasetDatabase.dataset_id == existing.primary_dataset_id,
-                        DatasetDatabase.owner_id == existing.service_user_id,
-                    )
-                )
-                if service_user is None or database is None:
-                    raise RuntimeError("Deleted Weave organization binding is incomplete")
-                self._validate_shared_database(database, existing.primary_dataset_id)
-                await self._recreate_shared_database(existing.primary_dataset_id, service_user)
-                existing.deleted_at = None
-                await lock_session.commit()
-                return _binding_result(existing)
 
             user = await self._service_user(organization_id)
             tenant_id = await self._tenant(organization_id, user)
@@ -231,6 +244,71 @@ class CogneeOrganizationProvisioningBackend:
             lock_session.add(record)
             await lock_session.commit()
             return _binding_result(record)
+
+    async def reactivate(
+        self, organization_id: UUID, lifecycle_generation: int
+    ) -> Optional[OrganizationBinding]:
+        _validate_lifecycle_generation(lifecycle_generation)
+        engine = get_relational_engine()
+        async with engine.get_async_session() as lock_session:
+            await set_weave_organization_scope(lock_session, organization_id)
+            if _dialect_name(lock_session) == "postgresql":
+                await lock_session.execute(
+                    text("SELECT pg_advisory_xact_lock(:lock_key)"),
+                    {"lock_key": _advisory_lock_key(organization_id)},
+                )
+            existing = await lock_session.scalar(
+                select(WeaveOrganizationBinding)
+                .where(WeaveOrganizationBinding.organization_id == organization_id)
+                .with_for_update()
+            )
+            if existing is None:
+                user = await self._service_user(organization_id)
+                tenant_id = await self._tenant(organization_id, user)
+                async with engine.get_async_session() as session:
+                    service_user = await session.scalar(select(User).where(User.id == user.id))
+                if service_user is None:
+                    raise RuntimeError("Provisioned Weave service user disappeared")
+                dataset = await create_authorized_dataset(
+                    f"weave-primary-{organization_id.hex}", service_user
+                )
+                from cognee.infrastructure.databases.utils.get_or_create_dataset_database import (
+                    get_or_create_dataset_database,
+                )
+
+                dataset_database = await get_or_create_dataset_database(dataset.id, service_user)
+                self._validate_shared_database(dataset_database, dataset.id)
+                existing = WeaveOrganizationBinding(
+                    organization_id=organization_id,
+                    tenant_id=tenant_id,
+                    service_user_id=service_user.id,
+                    primary_dataset_id=dataset.id,
+                    lifecycle_generation=lifecycle_generation,
+                )
+                lock_session.add(existing)
+                await lock_session.commit()
+                return _binding_result(existing)
+
+            if lifecycle_generation <= existing.lifecycle_generation:
+                return _binding_result(existing) if existing.deleted_at is None else None
+            if existing.deleted_at is not None:
+                service_user = await lock_session.scalar(
+                    select(User).where(User.id == existing.service_user_id)
+                )
+                database = await lock_session.scalar(
+                    select(DatasetDatabase).where(
+                        DatasetDatabase.dataset_id == existing.primary_dataset_id,
+                        DatasetDatabase.owner_id == existing.service_user_id,
+                    )
+                )
+                if service_user is None or database is None:
+                    raise RuntimeError("Deleted Weave organization binding is incomplete")
+                self._validate_shared_database(database, existing.primary_dataset_id)
+                await self._recreate_shared_database(existing.primary_dataset_id, service_user)
+                existing.deleted_at = None
+            existing.lifecycle_generation = lifecycle_generation
+            await lock_session.commit()
+            return _binding_result(existing)
 
     @staticmethod
     async def _recreate_shared_database(dataset_id: UUID, service_user: User) -> None:
@@ -273,6 +351,12 @@ _provisioner = OrganizationProvisioner(CogneeOrganizationProvisioningBackend())
 
 async def provision_organization(organization_id: UUID) -> OrganizationBinding:
     return await _provisioner.provision(organization_id)
+
+
+async def reactivate_organization(
+    organization_id: UUID, lifecycle_generation: int
+) -> Optional[OrganizationBinding]:
+    return await _provisioner.reactivate(organization_id, lifecycle_generation)
 
 
 async def get_organization_binding(organization_id: UUID) -> Optional[OrganizationBinding]:

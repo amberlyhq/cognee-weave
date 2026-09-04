@@ -23,11 +23,19 @@ fi
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 compose_file="${WEAVE_COMPOSE_FILE:-$root/deployment/docker-compose.weave.yml}"
 source_project="${WEAVE_COMPOSE_PROJECT:-cognee-weave-parity}"
-restore_project="${RESTORE_COMPOSE_PROJECT:-cognee-weave-restore-$(date +%s)}"
+restore_project="${RESTORE_COMPOSE_PROJECT:-cognee-weave-restore-$(date +%s)-$$-$(openssl rand -hex 8)}"
 if [[ ! "$restore_project" =~ ^cognee-weave-restore-[a-zA-Z0-9._-]+$ ]] || [ "$restore_project" = "$source_project" ]; then
   echo "restore project must be a distinct cognee-weave-restore-* name" >&2
   exit 2
 fi
+restore_lock_root="${RESTORE_LOCK_ROOT:-${TMPDIR:-/tmp}/cognee-weave-restore-locks}"
+mkdir -p "$restore_lock_root"
+restore_lock="$restore_lock_root/${restore_project}.lock"
+if ! mkdir "$restore_lock" 2>/dev/null; then
+  echo "restore project is already reserved: ${restore_project}" >&2
+  exit 2
+fi
+restore_started=false
 
 export WEAVE_ADMIN_DB_PASSWORD="${RESTORE_ADMIN_DB_PASSWORD:-$(openssl rand -hex 24)}"
 export WEAVE_DB_PASSWORD="${RESTORE_DB_PASSWORD:-$(openssl rand -hex 24)}"
@@ -35,25 +43,27 @@ export WEAVE_INTERNAL_TOKEN="${RESTORE_INTERNAL_TOKEN:-$(openssl rand -hex 32)}"
 export WEAVE_POSTGRES_PORT="${RESTORE_POSTGRES_PORT:-15433}"
 export WEAVE_HTTP_PORT="${RESTORE_HTTP_PORT:-18001}"
 
+cleanup() {
+  status=$?
+  trap - EXIT
+  if [ "$status" -ne 0 ] && [ "$restore_started" = "true" ]; then
+    docker compose -p "$restore_project" -f "$compose_file" logs --no-color --tail=200 >&2 || true
+  fi
+  if [ "$restore_started" = "true" ] && [ "${KEEP_WEAVE_RESTORE:-false}" != "true" ]; then
+    docker compose -p "$restore_project" -f "$compose_file" down --volumes --remove-orphans >/dev/null 2>&1 || true
+  fi
+  rmdir "$restore_lock" >/dev/null 2>&1 || true
+  exit "$status"
+}
+trap cleanup EXIT
+
 for resource in container volume network; do
   if [ -n "$(docker "${resource}" ls -q --filter label=com.docker.compose.project="$restore_project")" ]; then
     echo "restore project already owns Docker resources: ${restore_project}" >&2
     exit 2
   fi
 done
-
-cleanup() {
-  status=$?
-  trap - EXIT
-  if [ "$status" -ne 0 ]; then
-    docker compose -p "$restore_project" -f "$compose_file" logs --no-color --tail=200 >&2 || true
-  fi
-  if [ "${KEEP_WEAVE_RESTORE:-false}" != "true" ]; then
-    docker compose -p "$restore_project" -f "$compose_file" down --volumes --remove-orphans >/dev/null 2>&1 || true
-  fi
-  exit "$status"
-}
-trap cleanup EXIT
+restore_started=true
 
 docker compose -p "$restore_project" -f "$compose_file" up -d postgres
 for _ in $(seq 1 60); do

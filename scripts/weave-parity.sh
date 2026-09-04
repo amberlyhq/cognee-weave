@@ -77,7 +77,7 @@ for organization in "$organization_a" "$organization_b"; do
 done
 
 index_fixture() {
-  local organization="$1" repository_id="$2" name="$3" sha="$4" archive="$5"
+  local organization="$1" repository_id="$2" name="$3" sha="$4" archive="$5" generation="${6:-1}"
   curl -fsS -X POST -H "Authorization: Bearer ${WEAVE_INTERNAL_TOKEN}" \
     -F "archive=@${archive};type=application/gzip" \
     -F "github_repository_id=${repository_id}" \
@@ -87,6 +87,7 @@ index_fixture() {
     -F "requested_sha=${sha}" \
     -F "pipeline_version=weave-code.v1" \
     -F "extraction_version=enola-0.3.13" \
+    -F "lifecycle_generation=${generation}" \
     "$base_url/api/v1/weave/organizations/${organization}/repositories/index" >/dev/null
 }
 
@@ -107,6 +108,7 @@ if [ "$fixture_index_seconds_b" -gt 300 ]; then
 fi
 
 curl -fsS -X DELETE -H "Authorization: Bearer ${WEAVE_INTERNAL_TOKEN}" \
+  -H "Content-Type: application/json" -d '{"lifecycle_generation":2}' \
   "$base_url/api/v1/weave/organizations/${organization_a}/repositories/${repository_a}" >/dev/null
 removed_index_status="$(curl -sS -o "$temporary/removed-index.json" -w '%{http_code}' -X POST \
   -H "Authorization: Bearer ${WEAVE_INTERNAL_TOKEN}" \
@@ -118,14 +120,16 @@ removed_index_status="$(curl -sS -o "$temporary/removed-index.json" -w '%{http_c
   -F "requested_sha=${sha_a}" \
   -F "pipeline_version=weave-code.v1" \
   -F "extraction_version=enola-0.3.13" \
+  -F "lifecycle_generation=1" \
   "$base_url/api/v1/weave/organizations/${organization_a}/repositories/index")"
 if [ "$removed_index_status" != "409" ]; then
   echo "removed repository indexing did not return 409" >&2
   exit 1
 fi
 curl -fsS -X POST -H "Authorization: Bearer ${WEAVE_INTERNAL_TOKEN}" \
+  -H "Content-Type: application/json" -d '{"lifecycle_generation":3}' \
   "$base_url/api/v1/weave/organizations/${organization_a}/repositories/${repository_a}/activate" >/dev/null
-index_fixture "$organization_a" "$repository_a" "weave-alpha" "$sha_a" "$temporary/alpha.tar.gz"
+index_fixture "$organization_a" "$repository_a" "weave-alpha" "$sha_a" "$temporary/alpha.tar.gz" 3
 export WEAVE_STRICT_MODE=false
 export DB_PROVIDER=postgres DB_HOST=127.0.0.1 DB_PORT="$WEAVE_POSTGRES_PORT"
 export DB_USERNAME=cognee_admin DB_PASSWORD="$WEAVE_ADMIN_DB_PASSWORD" DB_NAME=cognee_db
@@ -187,10 +191,20 @@ if docker compose -p "$project" -f "$compose_file" exec -T postgres \
 fi
 
 curl -fsS -X DELETE -H "Authorization: Bearer ${WEAVE_INTERNAL_TOKEN}" \
+  -H "Content-Type: application/json" -d '{"lifecycle_generation":4}' \
   "$base_url/api/v1/weave/organizations/${organization_a}" >/dev/null
+provision_status="$(curl -sS -o "$temporary/deleted-provision.json" -w '%{http_code}' -X POST \
+  -H "Authorization: Bearer ${WEAVE_INTERNAL_TOKEN}" \
+  "$base_url/api/v1/weave/organizations/${organization_a}/provision")"
+if [ "$provision_status" != "409" ]; then
+  echo "normal provisioning revived a deleted organization" >&2
+  exit 1
+fi
 curl -fsS -X POST -H "Authorization: Bearer ${WEAVE_INTERNAL_TOKEN}" \
-  "$base_url/api/v1/weave/organizations/${organization_a}/provision" >/dev/null
+  -H "Content-Type: application/json" -d '{"lifecycle_generation":5}' \
+  "$base_url/api/v1/weave/organizations/${organization_a}/reactivate" >/dev/null
 curl -fsS -X DELETE -H "Authorization: Bearer ${WEAVE_INTERNAL_TOKEN}" \
+  -H "Content-Type: application/json" -d '{"lifecycle_generation":6}' \
   "$base_url/api/v1/weave/organizations/${organization_a}" >/dev/null
 
 export_response="$(curl -fsS -H "Authorization: Bearer ${WEAVE_INTERNAL_TOKEN}" \

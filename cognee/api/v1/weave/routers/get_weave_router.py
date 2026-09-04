@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from cognee.modules.weave.auth import require_internal_bearer
 from cognee.modules.weave.contracts import (
@@ -10,7 +10,11 @@ from cognee.modules.weave.contracts import (
     RecallResponse,
     SurfaceResponse,
 )
-from cognee.modules.weave.organizations import provision_organization
+from cognee.modules.weave.organizations import (
+    OrganizationDeletedError,
+    provision_organization,
+    reactivate_organization,
+)
 from cognee.tasks.code_graph.install_enola import ENOLA_PINNED_VERSION
 
 
@@ -24,6 +28,10 @@ class IndexRepositoryResponse(BaseModel):
     status: str
 
 
+class LifecycleRequest(BaseModel):
+    lifecycle_generation: int = Field(gt=0, le=2**63 - 1)
+
+
 def get_weave_router() -> APIRouter:
     router = APIRouter(dependencies=[Depends(require_internal_bearer)])
 
@@ -34,10 +42,27 @@ def get_weave_router() -> APIRouter:
     async def provision(
         organization_id: UUID,
     ) -> ProvisionOrganizationResponse:
-        binding = await provision_organization(organization_id)
+        try:
+            binding = await provision_organization(organization_id)
+        except OrganizationDeletedError as error:
+            raise HTTPException(status_code=409, detail="Organization is removed") from error
         return ProvisionOrganizationResponse(
             organization_id=binding.organization_id,
             status="ready",
+        )
+
+    @router.post(
+        "/organizations/{organization_id}/reactivate",
+        response_model=ProvisionOrganizationResponse,
+    )
+    async def reactivate(
+        organization_id: UUID,
+        request: LifecycleRequest,
+    ) -> ProvisionOrganizationResponse:
+        binding = await reactivate_organization(organization_id, request.lifecycle_generation)
+        return ProvisionOrganizationResponse(
+            organization_id=binding.organization_id if binding else organization_id,
+            status="ready" if binding else "stale_ignored",
         )
 
     @router.post(
@@ -54,6 +79,7 @@ def get_weave_router() -> APIRouter:
         requested_sha: str = Form(..., min_length=40, max_length=40),
         pipeline_version: str = Form(..., min_length=1, max_length=64),
         extraction_version: str = Form(..., min_length=1, max_length=64),
+        lifecycle_generation: int = Form(..., gt=0, le=2**63 - 1),
     ) -> IndexRepositoryResponse:
         from cognee.modules.weave.archive import persisted_upload
         from cognee.modules.weave.indexing import (
@@ -74,6 +100,7 @@ def get_weave_router() -> APIRouter:
                 requested_sha=requested_sha,
                 pipeline_version=pipeline_version,
                 extraction_version=extraction_version,
+                lifecycle_generation=lifecycle_generation,
             )
             async with persisted_upload(archive) as archive_path:
                 job = await index_repository_archive(request, archive_path)
@@ -92,11 +119,14 @@ def get_weave_router() -> APIRouter:
     async def activate_removed_repository(
         organization_id: UUID,
         github_repository_id: int,
+        request: LifecycleRequest,
     ) -> DeleteResponse:
         from cognee.modules.weave.deletion import SurfaceNotFound, activate_repository
 
         try:
-            return await activate_repository(organization_id, github_repository_id)
+            return await activate_repository(
+                organization_id, github_repository_id, request.lifecycle_generation
+            )
         except SurfaceNotFound as error:
             raise HTTPException(status_code=404, detail="Resource not found") from error
 
@@ -149,11 +179,14 @@ def get_weave_router() -> APIRouter:
     async def remove_repository(
         organization_id: UUID,
         github_repository_id: int,
+        request: LifecycleRequest,
     ) -> DeleteResponse:
         from cognee.modules.weave.deletion import SurfaceNotFound, delete_repository
 
         try:
-            return await delete_repository(organization_id, github_repository_id)
+            return await delete_repository(
+                organization_id, github_repository_id, request.lifecycle_generation
+            )
         except SurfaceNotFound as error:
             raise HTTPException(status_code=404, detail="Resource not found") from error
 
@@ -161,11 +194,13 @@ def get_weave_router() -> APIRouter:
         "/organizations/{organization_id}",
         response_model=DeleteResponse,
     )
-    async def remove_organization(organization_id: UUID) -> DeleteResponse:
+    async def remove_organization(
+        organization_id: UUID, request: LifecycleRequest
+    ) -> DeleteResponse:
         from cognee.modules.weave.deletion import SurfaceNotFound, delete_organization
 
         try:
-            return await delete_organization(organization_id)
+            return await delete_organization(organization_id, request.lifecycle_generation)
         except SurfaceNotFound as error:
             raise HTTPException(status_code=404, detail="Resource not found") from error
 

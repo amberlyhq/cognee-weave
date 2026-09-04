@@ -17,6 +17,7 @@ operation. Cognee Weave must keep its zero-leak floor while adding those proofs.
 | Exact-SHA code indexing and provenance | `test_weave_exact_sha_indexing.py` |
 | Hybrid graph/vector recall | `test_weave_hybrid_recall.py` |
 | Export, visualization, and deletion isolation | `test_weave_surface_isolation.py` |
+| Ordered organization/repository lifecycle | `test_weave_surface_isolation.py`, `weave-parity.sh` |
 | Private API authentication and bounded contracts | `test_internal_auth.py`, `test_recall_contract.py` |
 | Safe archive extraction and retry state | `test_archive_validation.py`, `test_index_state_machine.py` |
 | Backup and isolated restore | `weave-backup.sh`, `weave-restore-drill.sh` |
@@ -36,6 +37,8 @@ operation. Cognee Weave must keep its zero-leak floor while adding those proofs.
   total PostgreSQL size;
 - restored canary export returns the same repository identity, indexed SHA,
   nodes, and edges from an isolated fresh Compose project.
+- older lifecycle generations cannot reverse a newer removal, and normal
+  provisioning cannot recreate a deleted organization.
 
 These are safety and operability floors, not claims that Cognee Weave is faster
 or better than the previous implementation. Record p50/p90/p95 latency,

@@ -19,7 +19,11 @@ from cognee.modules.retrieval.code_retriever import (
 from cognee.modules.users.models import DatasetDatabase
 from cognee.modules.weave.contracts import DeleteResponse, SurfaceEdge, SurfaceResponse
 from cognee.modules.weave.indexing import weave_operation_lock
-from cognee.modules.weave.models import WeaveOrganizationBinding, WeaveRepositorySnapshot
+from cognee.modules.weave.models import (
+    WeaveOrganizationBinding,
+    WeaveRepositoryLifecycle,
+    WeaveRepositorySnapshot,
+)
 from cognee.modules.weave.organizations import (
     OrganizationBinding,
     get_organization_binding,
@@ -42,6 +46,11 @@ class SurfaceNotFound(LookupError):
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _validate_lifecycle_generation(value: int) -> None:
+    if value <= 0 or value > 2**63 - 1:
+        raise ValueError("lifecycle_generation must be a positive signed 64-bit integer")
 
 
 async def _surface_snapshots(
@@ -146,13 +155,85 @@ async def visualize_organization(
     return await _read_surface(organization_id, repository_ids or [], "visualization")
 
 
-async def _mark_repository_deleted(
+async def _repository_transition_is_newer(
     organization_id: UUID,
     github_repository_id: int,
+    lifecycle_generation: int,
+    *,
+    allow_create: bool,
+) -> bool:
+    engine = get_relational_engine()
+    async with engine.get_async_session() as session:
+        await set_weave_organization_scope(session, organization_id)
+        binding = await session.scalar(
+            select(WeaveOrganizationBinding)
+            .where(WeaveOrganizationBinding.organization_id == organization_id)
+            .with_for_update()
+        )
+        if binding is None:
+            raise SurfaceNotFound()
+        if binding.deleted_at is not None:
+            return False
+        lifecycle = await session.scalar(
+            select(WeaveRepositoryLifecycle)
+            .where(
+                WeaveRepositoryLifecycle.organization_id == organization_id,
+                WeaveRepositoryLifecycle.github_repository_id == github_repository_id,
+            )
+            .with_for_update()
+        )
+        if lifecycle is None and not allow_create:
+            snapshot = await session.scalar(
+                select(WeaveRepositorySnapshot).where(
+                    WeaveRepositorySnapshot.organization_id == organization_id,
+                    WeaveRepositorySnapshot.github_repository_id == github_repository_id,
+                )
+            )
+            if snapshot is None:
+                raise SurfaceNotFound()
+        return lifecycle is None or lifecycle_generation > lifecycle.lifecycle_generation
+
+
+async def _publish_repository_transition(
+    organization_id: UUID,
+    github_repository_id: int,
+    lifecycle_generation: int,
+    *,
+    active: bool,
 ) -> None:
     engine = get_relational_engine()
     async with engine.get_async_session() as session:
         await set_weave_organization_scope(session, organization_id)
+        binding = await session.scalar(
+            select(WeaveOrganizationBinding)
+            .where(WeaveOrganizationBinding.organization_id == organization_id)
+            .with_for_update()
+        )
+        if binding is None or binding.deleted_at is not None:
+            return
+        if lifecycle_generation > binding.lifecycle_generation:
+            binding.lifecycle_generation = lifecycle_generation
+        lifecycle = await session.scalar(
+            select(WeaveRepositoryLifecycle)
+            .where(
+                WeaveRepositoryLifecycle.organization_id == organization_id,
+                WeaveRepositoryLifecycle.github_repository_id == github_repository_id,
+            )
+            .with_for_update()
+        )
+        if lifecycle is not None and lifecycle_generation <= lifecycle.lifecycle_generation:
+            return
+        if lifecycle is None:
+            lifecycle = WeaveRepositoryLifecycle(
+                organization_id=organization_id,
+                github_repository_id=github_repository_id,
+                lifecycle_generation=lifecycle_generation,
+                active=active,
+            )
+            session.add(lifecycle)
+        else:
+            lifecycle.lifecycle_generation = lifecycle_generation
+            lifecycle.active = active
         snapshot = await session.scalar(
             select(WeaveRepositorySnapshot)
             .where(
@@ -161,35 +242,8 @@ async def _mark_repository_deleted(
             )
             .with_for_update()
         )
-        if snapshot is None:
-            raise SurfaceNotFound()
-        snapshot.deleted_at = _now()
-        snapshot.status = "deleted"
-        await session.commit()
-
-
-async def activate_repository(
-    organization_id: UUID,
-    github_repository_id: int,
-) -> DeleteResponse:
-    """Reactivate a tombstone only through the verified repository lifecycle API."""
-
-    async with weave_operation_lock(organization_id, github_repository_id):
-        binding = await get_organization_binding(organization_id)
-        if binding is None or github_repository_id <= 0:
-            raise SurfaceNotFound()
-        engine = get_relational_engine()
-        async with engine.get_async_session() as session:
-            await set_weave_organization_scope(session, organization_id)
-            snapshot = await session.scalar(
-                select(WeaveRepositorySnapshot)
-                .where(
-                    WeaveRepositorySnapshot.organization_id == organization_id,
-                    WeaveRepositorySnapshot.github_repository_id == github_repository_id,
-                )
-                .with_for_update()
-            )
-            if snapshot is not None and snapshot.deleted_at is not None:
+        if snapshot is not None:
+            if active:
                 snapshot.deleted_at = None
                 snapshot.requested_sha = None
                 snapshot.indexed_sha = None
@@ -197,7 +251,35 @@ async def activate_repository(
                 snapshot.extraction_version = None
                 snapshot.status = "not_indexed"
                 snapshot.error_code = None
-                await session.commit()
+            else:
+                snapshot.deleted_at = _now()
+                snapshot.status = "deleted"
+        await session.commit()
+
+
+async def activate_repository(
+    organization_id: UUID,
+    github_repository_id: int,
+    lifecycle_generation: int,
+) -> DeleteResponse:
+    """Reactivate a tombstone only through the verified repository lifecycle API."""
+
+    async with weave_operation_lock(organization_id, github_repository_id):
+        _validate_lifecycle_generation(lifecycle_generation)
+        if github_repository_id <= 0:
+            raise SurfaceNotFound()
+        if await _repository_transition_is_newer(
+            organization_id,
+            github_repository_id,
+            lifecycle_generation,
+            allow_create=True,
+        ):
+            await _publish_repository_transition(
+                organization_id,
+                github_repository_id,
+                lifecycle_generation,
+                active=True,
+            )
     return DeleteResponse(
         organization_id=organization_id,
         github_repository_id=github_repository_id,
@@ -207,10 +289,24 @@ async def activate_repository(
 async def delete_repository(
     organization_id: UUID,
     github_repository_id: int,
+    lifecycle_generation: int,
 ) -> DeleteResponse:
     async with weave_operation_lock(organization_id, github_repository_id):
+        _validate_lifecycle_generation(lifecycle_generation)
+        if github_repository_id <= 0:
+            raise SurfaceNotFound()
+        if not await _repository_transition_is_newer(
+            organization_id,
+            github_repository_id,
+            lifecycle_generation,
+            allow_create=False,
+        ):
+            return DeleteResponse(
+                organization_id=organization_id,
+                github_repository_id=github_repository_id,
+            )
         binding = await get_organization_binding(organization_id)
-        if binding is None or github_repository_id <= 0:
+        if binding is None:
             raise SurfaceNotFound()
 
         async with scoped_database_context_variables(
@@ -250,7 +346,12 @@ async def delete_repository(
 
         # Publish the tombstone only after every physical cleanup succeeds. A
         # failed cleanup remains active and the same DELETE can safely retry.
-        await _mark_repository_deleted(organization_id, github_repository_id)
+        await _publish_repository_transition(
+            organization_id,
+            github_repository_id,
+            lifecycle_generation,
+            active=False,
+        )
 
     return DeleteResponse(
         organization_id=organization_id,
@@ -260,20 +361,24 @@ async def delete_repository(
 
 async def _load_organization_for_delete(
     organization_id: UUID,
-) -> tuple[OrganizationBinding, DatasetDatabase]:
+    lifecycle_generation: int,
+) -> tuple[OrganizationBinding | None, DatasetDatabase | None]:
     engine = get_relational_engine()
     async with engine.get_async_session() as session:
         await set_weave_organization_scope(session, organization_id)
         record = await session.scalar(
             select(WeaveOrganizationBinding)
-            .where(
-                WeaveOrganizationBinding.organization_id == organization_id,
-                WeaveOrganizationBinding.deleted_at.is_(None),
-            )
+            .where(WeaveOrganizationBinding.organization_id == organization_id)
             .with_for_update()
         )
         if record is None:
             raise SurfaceNotFound()
+        if lifecycle_generation <= record.lifecycle_generation:
+            return None, None
+        if record.deleted_at is not None:
+            record.lifecycle_generation = lifecycle_generation
+            await session.commit()
+            return None, None
         database = await session.scalar(
             select(DatasetDatabase).where(DatasetDatabase.dataset_id == record.primary_dataset_id)
         )
@@ -290,7 +395,7 @@ async def _load_organization_for_delete(
         return binding, database
 
 
-async def _mark_organization_deleted(organization_id: UUID) -> None:
+async def _mark_organization_deleted(organization_id: UUID, lifecycle_generation: int) -> None:
     engine = get_relational_engine()
     async with engine.get_async_session() as session:
         await set_weave_organization_scope(session, organization_id)
@@ -306,6 +411,7 @@ async def _mark_organization_deleted(organization_id: UUID) -> None:
             raise SurfaceNotFound()
         deleted_at = _now()
         record.deleted_at = deleted_at
+        record.lifecycle_generation = lifecycle_generation
         await session.execute(
             update(WeaveRepositorySnapshot)
             .where(
@@ -313,6 +419,14 @@ async def _mark_organization_deleted(organization_id: UUID) -> None:
                 WeaveRepositorySnapshot.deleted_at.is_(None),
             )
             .values(deleted_at=deleted_at, status="deleted")
+        )
+        await session.execute(
+            update(WeaveRepositoryLifecycle)
+            .where(
+                WeaveRepositoryLifecycle.organization_id == organization_id,
+                WeaveRepositoryLifecycle.lifecycle_generation < lifecycle_generation,
+            )
+            .values(active=False, lifecycle_generation=lifecycle_generation)
         )
         await session.commit()
 
@@ -322,17 +436,20 @@ async def _drop_bound_organization_schema(organization_id: UUID) -> None:
     async with engine.get_async_session() as session:
         await set_weave_organization_scope(session, organization_id)
         await session.execute(
-            text(
-                "SELECT public.weave_drop_organization_dataset_schema(:organization_id)"
-            ),
+            text("SELECT public.weave_drop_organization_dataset_schema(:organization_id)"),
             {"organization_id": organization_id},
         )
         await session.commit()
 
 
-async def delete_organization(organization_id: UUID) -> DeleteResponse:
+async def delete_organization(organization_id: UUID, lifecycle_generation: int) -> DeleteResponse:
     async with weave_operation_lock(organization_id):
-        binding, database = await _load_organization_for_delete(organization_id)
+        _validate_lifecycle_generation(lifecycle_generation)
+        binding, database = await _load_organization_for_delete(
+            organization_id, lifecycle_generation
+        )
+        if binding is None or database is None:
+            return DeleteResponse(organization_id=organization_id)
         async with scoped_database_context_variables(
             binding.dataset_id,
             binding.service_user_id,
@@ -353,5 +470,5 @@ async def delete_organization(organization_id: UUID) -> DeleteResponse:
             await _drop_bound_organization_schema(organization_id)
         else:
             await PGVectorSharedDatasetDatabaseHandler.delete_dataset(database)
-        await _mark_organization_deleted(organization_id)
+        await _mark_organization_deleted(organization_id, lifecycle_generation)
         return DeleteResponse(organization_id=organization_id)

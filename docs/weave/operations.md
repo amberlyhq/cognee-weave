@@ -50,6 +50,9 @@ process, so no separate worker is required. The script provisions two test
 organizations, indexes exact fixture SHAs, runs the Postgres isolation suite,
 checks every API surface, deletes one tenant, and performs a backup/restore
 drill in a separate Compose project.
+The lifecycle checks prove that ordinary push provisioning cannot revive an
+organization tombstone, stale generations are ignored, and only the verified
+reactivation endpoints can restore organization or repository state.
 
 The script removes its disposable volumes by default. It never targets an
 existing project name. Set `WEAVE_PARITY_REPORT` to preserve its JSON receipt.
@@ -75,8 +78,9 @@ those running-service values are read back.
   custom-format PostgreSQL backup and refuses to overwrite a file.
 - `scripts/weave-restore-drill.sh /absolute/backup.dump` restores only into a
   fresh project whose name starts with `cognee-weave-restore-`. It rejects the
-  source project name, refuses a name already owning Compose resources, and
-  runs canary export/provenance checks.
+  source project name, acquires an atomic per-project reservation before
+  checking Compose resources, and runs canary export/provenance checks. The
+  generated name includes the process identity and cryptographic randomness.
 - Repository archives are temporary and deleted after indexing. Derived graph
   and vector data remains rebuildable from GitHub at the recorded SHA.
 - Rotate `WEAVE_INTERNAL_TOKEN` in Weave and Amberly together. During mismatch,

@@ -98,8 +98,7 @@ def test_rls_covers_every_shared_control_plane_table_on_fresh_and_existing_datab
     assert forward_migration_path.exists()
     forward_migration = forward_migration_path.read_text()
     deletion_migration_path = (
-        ROOT
-        / "cognee/alembic/versions/a5c7e9b1d3f6_add_scoped_weave_schema_deletion.py"
+        ROOT / "cognee/alembic/versions/a5c7e9b1d3f6_add_scoped_weave_schema_deletion.py"
     )
     assert deletion_migration_path.exists()
     deletion_migration = deletion_migration_path.read_text()
@@ -155,6 +154,8 @@ def test_weave_index_api_pins_the_actual_extractor_version():
     router = (ROOT / "cognee/api/v1/weave/routers/get_weave_router.py").read_text()
     assert "ENOLA_PINNED_VERSION" in router
     assert 'extraction_version != f"enola-{ENOLA_PINNED_VERSION}"' in router
+    assert "lifecycle_generation" in router
+    assert "/reactivate" in router
 
 
 def test_weave_ci_runs_every_fork_specific_postgres_gate():
@@ -183,7 +184,10 @@ def test_parity_keeps_admin_only_test_cleanup_out_of_the_runtime_service():
     compose = (ROOT / "deployment/docker-compose.weave.yml").read_text()
     assert "export WEAVE_STRICT_MODE=false" in parity
     assert "export DB_USERNAME=cognee_admin" in parity
-    assert 'export WEAVE_ADMIN_DB_PASSWORD="${WEAVE_ADMIN_DB_PASSWORD:-$(openssl rand -hex 24)}"' in parity
+    assert (
+        'export WEAVE_ADMIN_DB_PASSWORD="${WEAVE_ADMIN_DB_PASSWORD:-$(openssl rand -hex 24)}"'
+        in parity
+    )
     assert 'DB_PASSWORD="$WEAVE_ADMIN_DB_PASSWORD"' in parity
     assert 'WEAVE_STRICT_MODE: "true"' in compose
     assert "DB_USERNAME: cognee" in compose
@@ -268,7 +272,14 @@ def test_parity_backup_and_restore_scripts_are_fail_closed():
     assert "for resource in container volume network" in restore
     assert 'com.docker.compose.project="$restore_project"' in restore
     assert "restore project already owns Docker resources" in restore
-    assert restore.index("restore project already owns Docker resources") < restore.index("trap cleanup EXIT")
+    assert "RESTORE_LOCK_ROOT" in restore
+    assert 'mkdir "$restore_lock"' in restore
+    assert "openssl rand -hex 8" in restore
+    assert "restore project is already reserved" in restore
+    assert restore.index('mkdir "$restore_lock"') < restore.index("trap cleanup EXIT")
+    assert restore.index("trap cleanup EXIT") < restore.index(
+        "restore project already owns Docker resources"
+    )
     assert "logs --no-color --tail=200" in restore
 
 
@@ -284,5 +295,8 @@ def test_strict_organization_deletion_evicts_both_shared_adapter_caches():
 
 def test_migration_logs_never_render_database_passwords():
     alembic_environment = (ROOT / "cognee/alembic/env.py").read_text()
-    assert "safe_db_uri = db_engine.engine.url.render_as_string(hide_password=True)" in alembic_environment
+    assert (
+        "safe_db_uri = db_engine.engine.url.render_as_string(hide_password=True)"
+        in alembic_environment
+    )
     assert 'info("Using database: %s", safe_db_uri)' in alembic_environment

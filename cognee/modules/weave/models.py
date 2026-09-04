@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     DateTime,
     ForeignKey,
@@ -38,6 +39,7 @@ class WeaveOrganizationBinding(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
     deleted_at = Column(DateTime(timezone=True), nullable=True)
+    lifecycle_generation = Column(BigInteger, nullable=False, default=0)
 
     @validates("organization_id", "tenant_id", "service_user_id", "primary_dataset_id")
     def _keep_identity_immutable(self, key, value):
@@ -45,6 +47,23 @@ class WeaveOrganizationBinding(Base):
         if current is not None and current != value:
             raise ValueError(f"Weave organization binding {key} is immutable")
         return value
+
+
+class WeaveRepositoryLifecycle(Base):
+    """Ordered GitHub lifecycle state independent of repository index state."""
+
+    __tablename__ = "weave_repository_lifecycles"
+
+    organization_id = Column(
+        UUID,
+        ForeignKey("weave_organization_bindings.organization_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    github_repository_id = Column(BigInteger, primary_key=True)
+    lifecycle_generation = Column(BigInteger, nullable=False, default=0)
+    active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
 
 class WeaveRepositorySnapshot(Base):

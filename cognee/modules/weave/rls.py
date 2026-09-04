@@ -5,6 +5,7 @@ from cognee.infrastructure.databases.relational import get_relational_engine
 RLS_TABLES = (
     "weave_organization_bindings",
     "weave_repository_snapshots",
+    "weave_repository_lifecycles",
     "weave_index_jobs",
 )
 

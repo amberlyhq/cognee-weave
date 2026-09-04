@@ -51,12 +51,21 @@ def test_binding_identity_cannot_be_reassigned():
 
 def test_repository_and_job_tables_are_organization_scoped():
     from cognee.modules.weave.models import WeaveIndexJob
+    from cognee.modules.weave.models import WeaveOrganizationBinding
+    from cognee.modules.weave.models import WeaveRepositoryLifecycle
     from cognee.modules.weave.models import WeaveRepositorySnapshot
 
     assert WeaveRepositorySnapshot.__table__.c.organization_id.nullable is False
     assert WeaveIndexJob.__table__.c.organization_id.nullable is False
     assert {column.name for column in WeaveRepositorySnapshot.__table__.primary_key} == {"id"}
     assert {column.name for column in WeaveIndexJob.__table__.primary_key} == {"id"}
+    assert WeaveOrganizationBinding.__table__.c.lifecycle_generation.nullable is False
+    assert WeaveRepositoryLifecycle.__table__.c.lifecycle_generation.nullable is False
+    assert WeaveRepositoryLifecycle.__table__.c.active.nullable is False
+    assert {column.name for column in WeaveRepositoryLifecycle.__table__.primary_key} == {
+        "organization_id",
+        "github_repository_id",
+    }
 
 
 @pytest.mark.asyncio

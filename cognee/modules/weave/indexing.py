@@ -10,7 +10,12 @@ from uuid import UUID, uuid4
 from sqlalchemy import select, text
 
 from cognee.infrastructure.databases.relational import get_relational_engine
-from cognee.modules.weave.models import WeaveIndexJob, WeaveRepositorySnapshot
+from cognee.modules.weave.models import (
+    WeaveIndexJob,
+    WeaveOrganizationBinding,
+    WeaveRepositoryLifecycle,
+    WeaveRepositorySnapshot,
+)
 from cognee.modules.weave.organizations import (
     get_organization_binding,
     set_weave_organization_scope,
@@ -38,12 +43,15 @@ class IndexRequest:
     requested_sha: str
     pipeline_version: str
     extraction_version: str
+    lifecycle_generation: int = 1
 
     def __post_init__(self) -> None:
         if not _FULL_SHA.fullmatch(self.requested_sha):
             raise ValueError("requested_sha must be a lowercase 40-character Git SHA")
         if self.github_repository_id <= 0 or self.github_repository_id > 2**63 - 1:
             raise ValueError("github_repository_id must be a positive signed 64-bit integer")
+        if self.lifecycle_generation <= 0 or self.lifecycle_generation > 2**63 - 1:
+            raise ValueError("lifecycle_generation must be a positive signed 64-bit integer")
         if not _GITHUB_NAME.fullmatch(self.repository_owner) or not _GITHUB_NAME.fullmatch(
             self.repository_name
         ):
@@ -306,6 +314,15 @@ class PostgresIndexStateStore:
                     text("SELECT pg_advisory_xact_lock(:lock_key)"),
                     {"lock_key": _store_lock_key(request)},
                 )
+            binding = await session.scalar(
+                select(WeaveOrganizationBinding)
+                .where(WeaveOrganizationBinding.organization_id == request.organization_id)
+                .with_for_update()
+            )
+            if binding is None or binding.deleted_at is not None:
+                raise LookupError("Organization not found")
+            if request.lifecycle_generation > binding.lifecycle_generation:
+                binding.lifecycle_generation = request.lifecycle_generation
 
             snapshot = await session.scalar(
                 select(WeaveRepositorySnapshot).where(
@@ -313,10 +330,35 @@ class PostgresIndexStateStore:
                     WeaveRepositorySnapshot.github_repository_id == request.github_repository_id,
                 )
             )
+            lifecycle = await session.scalar(
+                select(WeaveRepositoryLifecycle)
+                .where(
+                    WeaveRepositoryLifecycle.organization_id == request.organization_id,
+                    WeaveRepositoryLifecycle.github_repository_id == request.github_repository_id,
+                )
+                .with_for_update()
+            )
+            if lifecycle is not None and (
+                not lifecycle.active
+                or request.lifecycle_generation < lifecycle.lifecycle_generation
+            ):
+                raise RepositoryDeletedError(
+                    "Repository lifecycle is removed or newer than this index request"
+                )
             if snapshot is not None and snapshot.deleted_at is not None:
                 raise RepositoryDeletedError(
                     "Repository is removed; a verified installation event must reactivate it"
                 )
+            if lifecycle is None:
+                lifecycle = WeaveRepositoryLifecycle(
+                    organization_id=request.organization_id,
+                    github_repository_id=request.github_repository_id,
+                    lifecycle_generation=request.lifecycle_generation,
+                    active=True,
+                )
+                session.add(lifecycle)
+            elif request.lifecycle_generation > lifecycle.lifecycle_generation:
+                lifecycle.lifecycle_generation = request.lifecycle_generation
             job = await session.scalar(
                 select(WeaveIndexJob).where(
                     WeaveIndexJob.organization_id == request.organization_id,
