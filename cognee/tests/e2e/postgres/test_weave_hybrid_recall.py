@@ -4,7 +4,6 @@ from uuid import UUID
 
 import pytest
 
-
 pytestmark = pytest.mark.skipif(
     os.getenv("DB_PROVIDER") != "postgres",
     reason="requires the real Postgres Weave control plane",
@@ -40,14 +39,14 @@ def _request(organization_id, repository_id, name, sha):
 
 
 @pytest.mark.asyncio
-async def test_native_recall_routes_repository_datasets_but_never_organizations(
+async def test_native_recall_routes_customer_datasets_but_never_organizations(
     tmp_path, offline_native_recall
 ):
     from cognee.modules.weave.contracts import RecallRequest
     from cognee.modules.weave.indexing import index_repository_archive
+    from cognee.modules.weave.native_memory import customer_dataset
     from cognee.modules.weave.organizations import provision_organization
     from cognee.modules.weave.recall import recall
-    from cognee.modules.weave.native_memory import repository_dataset
 
     organization_a = UUID("8e1a7b9d-08c2-4f57-9884-623e01b68a01")
     organization_b = UUID("8e1a7b9d-08c2-4f57-9884-623e01b68a02")
@@ -67,19 +66,19 @@ async def test_native_recall_routes_repository_datasets_but_never_organizations(
 
     response_a = await recall(
         organization_a,
-        RecallRequest(query="Message", top_k=25, deadline_ms=15000),
+        RecallRequest(query="Message", top_k=25),
     )
     response_b = await recall(
         organization_b,
-        RecallRequest(query="Message", top_k=25, deadline_ms=15000),
+        RecallRequest(query="Message", top_k=25),
     )
 
     assert response_a.status == "available"
     assert {item.github_repository_id for item in response_a.repositories} == {930001, 930002}
     assert not response_a.graph_candidates and not response_a.vector_candidates
     assert response_a.native_memory
-    a_ids = {(await repository_dataset(binding_a, item)).id for item in (930001, 930002)}
-    b_id = (await repository_dataset(binding_b, 930003)).id
+    a_ids = {(await customer_dataset(binding_a)).id}
+    b_id = (await customer_dataset(binding_b)).id
     assert set(offline_native_recall[0][0]) == a_ids
     assert offline_native_recall[0][1] == binding_a.service_user_id
     assert b_id not in a_ids

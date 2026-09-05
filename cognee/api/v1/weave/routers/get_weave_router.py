@@ -8,6 +8,8 @@ from cognee.modules.weave.contracts import (
     DeleteResponse,
     RecallRequest,
     RecallResponse,
+    ReviewMemoryRequest,
+    ReviewMemoryResponse,
     SurfaceResponse,
 )
 from cognee.modules.weave.organizations import (
@@ -34,6 +36,19 @@ class LifecycleRequest(BaseModel):
 
 def get_weave_router() -> APIRouter:
     router = APIRouter(dependencies=[Depends(require_internal_bearer)])
+
+    @router.post(
+        "/organizations/{organization_id}/reviews/remember", response_model=ReviewMemoryResponse
+    )
+    async def review_memory(organization_id: UUID, request: ReviewMemoryRequest):
+        from cognee.modules.weave.review_memory import remember_review
+
+        try:
+            return await remember_review(organization_id, request)
+        except LookupError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
 
     @router.post(
         "/organizations/{organization_id}/provision",

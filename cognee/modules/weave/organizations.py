@@ -151,6 +151,7 @@ class CogneeOrganizationProvisioningBackend:
                 select(WeaveOrganizationBinding).where(
                     WeaveOrganizationBinding.organization_id == organization_id,
                     WeaveOrganizationBinding.deleted_at.is_(None),
+                    WeaveOrganizationBinding.deletion_pending.is_(False),
                 )
             )
             return _binding_result(record) if record else None
@@ -210,7 +211,7 @@ class CogneeOrganizationProvisioningBackend:
                 )
             )
             if existing is not None:
-                if existing.deleted_at is None:
+                if existing.deleted_at is None and not existing.deletion_pending:
                     return _binding_result(existing)
                 raise OrganizationDeletedError(
                     "A verified installation.created lifecycle event must reactivate this organization"
@@ -290,6 +291,8 @@ class CogneeOrganizationProvisioningBackend:
                 await lock_session.commit()
                 return _binding_result(existing)
 
+            if existing.deletion_pending:
+                raise OrganizationDeletedError("Organization cleanup is still pending")
             if lifecycle_generation <= existing.lifecycle_generation:
                 return _binding_result(existing) if existing.deleted_at is None else None
             if existing.deleted_at is not None:

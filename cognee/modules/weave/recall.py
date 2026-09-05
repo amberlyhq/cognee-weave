@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import deque
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
-from typing import Any, Iterable, Mapping
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import case, select
@@ -64,12 +65,9 @@ async def recall(organization_id: UUID, request: RecallRequest) -> RecallRespons
     """Return bounded evidence candidates, never an Amberly governance decision."""
 
     try:
-        async with asyncio.timeout(request.deadline_ms / 1000):
-            from cognee.modules.weave.native_memory import recall_repository_memory
+        from cognee.modules.weave.native_memory import recall_repository_memory
 
-            return await recall_repository_memory(organization_id, request)
-    except TimeoutError:
-        return _unavailable(organization_id, request, "timed_out", "deadline_exceeded")
+        return await recall_repository_memory(organization_id, request)
     except Exception:
         logger.exception("Weave recall backend failed for organization %s", organization_id)
         return _unavailable(organization_id, request, "unavailable", "backend_unavailable")

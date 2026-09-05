@@ -15,7 +15,36 @@ from cognee.modules.users.methods import get_user
 from cognee.modules.weave.config import get_weave_embedding_config, get_weave_llm_config
 from cognee.modules.weave.scope import native_organization
 
-NATIVE_PIPELINE_VERSION = "weave-native-memory.v1"
+NATIVE_PIPELINE_VERSION = "weave-native-memory.v2"
+
+
+async def customer_dataset(binding):
+    async with get_relational_engine().get_async_session() as session:
+        return await session.scalar(
+            select(Dataset).where(
+                Dataset.id == binding.dataset_id,
+                Dataset.owner_id == binding.service_user_id,
+                Dataset.tenant_id == binding.tenant_id,
+            )
+        )
+
+
+async def customer_snapshots(organization_id):
+    from cognee.modules.weave.models import WeaveRepositorySnapshot
+    from cognee.modules.weave.organizations import set_weave_organization_scope
+
+    async with get_relational_engine().get_async_session() as session:
+        await set_weave_organization_scope(session, organization_id)
+        return list(
+            await session.scalars(
+                select(WeaveRepositorySnapshot)
+                .where(
+                    WeaveRepositorySnapshot.organization_id == organization_id,
+                    WeaveRepositorySnapshot.deleted_at.is_(None),
+                )
+                .order_by(WeaveRepositorySnapshot.github_repository_id)
+            )
+        )
 
 
 def repository_dataset_name(organization_id: UUID, repository_id: int) -> str:
@@ -38,6 +67,14 @@ async def repository_dataset(binding, repository_id: int):
 
 
 async def forget_repository(binding, repository_id: int) -> None:
+    from cognee.modules.weave.memory_sources import forget_source, source_records
+
+    user = await get_user(binding.service_user_id)
+    async with scoped_database_context_variables(binding.dataset_id, user.id):
+        for record in await source_records(binding, repository_id):
+            await forget_source(binding, user, record)
+    # Legacy datasets are retained during indexing migration. An explicit
+    # repository removal must still remove that repository's legacy memory.
     dataset = await repository_dataset(binding, repository_id)
     if dataset is None:
         return
@@ -71,36 +108,52 @@ async def forget_organization_memory(binding) -> None:
             )
         )
     user = await get_user(binding.service_user_id)
+    from cognee.modules.weave.memory_sources import forget_source, source_records
+
+    async with scoped_database_context_variables(binding.dataset_id, user.id):
+        for record in await source_records(binding):
+            await forget_source(binding, user, record)
     for dataset in datasets:
         await _forget_dataset(binding, dataset, user)
 
 
 async def remember_repository(binding, request, repository):
-    import cognee
-    from cognee.modules.data.methods.create_authorized_dataset import create_authorized_dataset
+    from cognee.modules.weave.memory_sources import forget_source, source_records, sync_source
+    from cognee.modules.weave.repository_sources import prepare_repository_sources
 
     # Caller holds the operation lock and has marked the snapshot running.
-    # Replacement uses native deletion; failed rebuilds are not served as current.
+    # Replace individual native sources, never the customer dataset.
     embedding = get_weave_embedding_config()
     llm = get_weave_llm_config()
-    await forget_repository(binding, request.github_repository_id)
     user = await get_user(binding.service_user_id)
-    dataset = await create_authorized_dataset(
-        repository_dataset_name(binding.organization_id, request.github_repository_id), user
-    )
+    dataset = await customer_dataset(binding)
+    if dataset is None:
+        raise LookupError("Customer dataset not found")
     async with scoped_database_context_variables(
         dataset.id, user.id, llm_config=llm, embedding_config=embedding
     ):
-        result = await cognee.remember(
-            str(repository),
-            dataset_id=dataset.id,
-            user=user,
-            llm_config=llm,
-            embedding_config=embedding,
+        sources = await prepare_repository_sources(
+            repository, request, user=user, dataset_id=dataset.id
         )
-        if result.status != "completed":
-            raise RuntimeError("Native remember did not complete")
-        return result
+        wanted = {key for key, _, _ in sources}
+        for record in await source_records(binding, request.github_repository_id):
+            if not record.source_key.startswith("review:") and record.source_key not in wanted:
+                await forget_source(binding, user, record)
+        actions = []
+        for key, item, fingerprint in sources:
+            actions.append(
+                await sync_source(
+                    binding,
+                    user,
+                    request.github_repository_id,
+                    key,
+                    item,
+                    fingerprint,
+                    llm=llm,
+                    embedding=embedding,
+                )
+            )
+        return actions
 
 
 def snapshots_ready(records) -> bool:
@@ -117,8 +170,9 @@ async def recall_repository_memory(organization_id, request):
     import cognee
     from cognee.modules.weave.contracts import RecallResponse
     from cognee.modules.weave.indexing import weave_operation_lock
+    from cognee.modules.weave.memory_sources import source_records
     from cognee.modules.weave.organizations import get_organization_binding
-    from cognee.modules.weave.recall import _load_snapshots, _repository_reference, _unavailable
+    from cognee.modules.weave.recall import _repository_reference, _unavailable
 
     # Freeze selected revisions during retrieval. Repository writes take the
     # corresponding shared organization lock, so cannot race this read.
@@ -128,10 +182,11 @@ async def recall_repository_memory(organization_id, request):
             return _unavailable(
                 organization_id, request, "unavailable", "organization_not_provisioned"
             )
-        records = await _load_snapshots(
-            organization_id, request.github_repository_ids, request.primary_github_repository_id
-        )
-        if not snapshots_ready(records):
+        # Native recall searches the customer dataset, so disclose and validate
+        # every repository receipt, including incomplete first-time indexes.
+        records = await customer_snapshots(organization_id)
+        sources = await source_records(binding)
+        if not snapshots_ready(records) or any(s.status != "completed" for s in sources):
             return _unavailable(organization_id, request, "unavailable", "no_indexed_repository")
         selected = {record.github_repository_id for record in records}
         required = set(request.github_repository_ids)
@@ -139,20 +194,18 @@ async def recall_repository_memory(organization_id, request):
             required.add(request.primary_github_repository_id)
         if not required.issubset(selected):
             return _unavailable(organization_id, request, "unavailable", "no_indexed_repository")
-        datasets = [
-            await repository_dataset(binding, record.github_repository_id) for record in records
-        ]
-        if any(dataset is None for dataset in datasets):
+        dataset = await customer_dataset(binding)
+        if dataset is None:
             return _unavailable(organization_id, request, "unavailable", "no_indexed_repository")
         user = await get_user(binding.service_user_id)
         embedding = get_weave_embedding_config()
         llm = get_weave_llm_config()
         async with scoped_database_context_variables(
-            datasets[0].id, user.id, llm_config=llm, embedding_config=embedding
+            dataset.id, user.id, llm_config=llm, embedding_config=embedding
         ):
             result = await cognee.recall(
                 request.query,
-                dataset_ids=[dataset.id for dataset in datasets],
+                dataset_ids=[dataset.id],
                 user=user,
                 top_k=request.top_k,
                 llm_config=llm,

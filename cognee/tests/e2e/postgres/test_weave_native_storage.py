@@ -50,6 +50,10 @@ async def test_native_forget_removes_only_the_bound_repository_dataset():
         datasets.append(dataset)
 
     engine = get_relational_engine()
+    # V2 inspection uses primary storage, never retained legacy repository data.
+    async with scoped_database_context_variables(a.dataset_id, a.service_user_id):
+        graph = await get_graph_engine()
+        await graph.add_nodes([(str(uuid4()), {"name": "primary memory", "type": "Entity"})])
     async with engine.get_async_session() as session:
         await set_weave_organization_scope(session, a.organization_id)
         session.add(
@@ -70,8 +74,9 @@ async def test_native_forget_removes_only_the_bound_repository_dataset():
     surface = await visualize_organization(a.organization_id, [42])
     assert not surface.nodes  # Do not pretend native entities are verified symbols.
     native = json.loads(surface.native_graph)
-    assert {properties["type"] for _, properties in native[0]["nodes"]} == {"Entity", "TextSummary"}
-    assert native[0]["indexed_sha"] == "a" * 40
+    assert {properties["name"] for _, properties in native[0]["nodes"]} == {"primary memory"}
+    assert native[0]["dataset_id"] == str(a.dataset_id)
+    assert surface.repositories[0].indexed_default_sha == "a" * 40
     with pytest.raises(Exception, match="Bound native Weave dataset not found"):
         async with engine.get_async_session() as session:
             await set_weave_organization_scope(session, b.organization_id)

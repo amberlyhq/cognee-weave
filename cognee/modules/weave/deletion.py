@@ -89,9 +89,10 @@ async def _read_surface(
 
 
 async def _read_locked_surface(organization_id, repository_ids, surface) -> SurfaceResponse:
+    from cognee.modules.weave.memory_sources import source_records
     from cognee.modules.weave.native_memory import (
-        NATIVE_PIPELINE_VERSION,
-        repository_dataset,
+        customer_dataset,
+        customer_snapshots,
         snapshots_ready,
     )
 
@@ -99,32 +100,25 @@ async def _read_locked_surface(organization_id, repository_ids, surface) -> Surf
     if binding is None:
         raise SurfaceNotFound()
     records = await _surface_snapshots(organization_id, repository_ids)
-    if len(records) > 20:
-        raise SurfaceNotFound()
-    if any(record.pipeline_version == NATIVE_PIPELINE_VERSION for record in records):
-        if not snapshots_ready(records):
+    customer_records = await customer_snapshots(organization_id)
+    if any(
+        (record.pipeline_version or "").startswith("weave-native-memory.")
+        for record in customer_records
+    ):
+        records = customer_records
+        if not snapshots_ready(records) or any(
+            s.status != "completed" for s in await source_records(binding)
+        ):
             raise SurfaceNotFound()
-        native = []
-        nodes_left, edges_left = 500, 1000
-        for record in records:
-            dataset = await repository_dataset(binding, record.github_repository_id)
-            if dataset is None:
-                raise SurfaceNotFound()
-            async with scoped_database_context_variables(dataset.id, binding.service_user_id):
-                graph = await get_graph_engine()
-                nodes, edges = await graph.get_filtered_graph_data(
-                    [], max_nodes=nodes_left, max_edges=edges_left
-                )
-            nodes_left -= len(nodes)
-            edges_left -= len(edges)
-            native.append(
-                {
-                    "github_repository_id": record.github_repository_id,
-                    "indexed_sha": record.indexed_sha,
-                    "nodes": nodes,
-                    "edges": edges,
-                }
-            )
+        dataset = await customer_dataset(binding)
+        if dataset is None:
+            raise SurfaceNotFound()
+        async with scoped_database_context_variables(dataset.id, binding.service_user_id):
+            graph = await get_graph_engine()
+            nodes, edges = await graph.get_filtered_graph_data([], max_nodes=500, max_edges=1000)
+        native = [
+            {"dataset_id": str(dataset.id), "scope": "customer", "nodes": nodes, "edges": edges}
+        ]
         payload = json.dumps(native, default=str, ensure_ascii=False)
         if len(payload) > 1000000:
             raise ValueError("Native graph exceeds the export size boundary")
@@ -219,7 +213,7 @@ async def _repository_transition_is_newer(
         )
         if binding is None:
             raise SurfaceNotFound()
-        if binding.deleted_at is not None:
+        if binding.deleted_at is not None or binding.deletion_pending:
             return False
         if lifecycle_generation < binding.lifecycle_generation:
             return False
@@ -231,6 +225,8 @@ async def _repository_transition_is_newer(
             )
             .with_for_update()
         )
+        if allow_create and lifecycle is not None and lifecycle.deletion_pending:
+            raise RuntimeError("Repository cleanup is still pending")
         if lifecycle is None and not allow_create:
             snapshot = await session.scalar(
                 select(WeaveRepositorySnapshot).where(
@@ -286,6 +282,7 @@ async def _publish_repository_transition(
         else:
             lifecycle.lifecycle_generation = lifecycle_generation
             lifecycle.active = active
+            lifecycle.deletion_pending = False
         snapshot = await session.scalar(
             select(WeaveRepositorySnapshot)
             .where(
@@ -338,6 +335,30 @@ async def activate_repository(
     )
 
 
+async def _mark_repository_deleting(organization_id, repository_id):
+    async with get_relational_engine().get_async_session() as session:
+        await set_weave_organization_scope(session, organization_id)
+        lifecycle = await session.get(WeaveRepositoryLifecycle, (organization_id, repository_id))
+        if lifecycle is None:
+            lifecycle = WeaveRepositoryLifecycle(
+                organization_id=organization_id,
+                github_repository_id=repository_id,
+                deletion_pending=True,
+            )
+            session.add(lifecycle)
+        else:
+            lifecycle.deletion_pending = True
+        await session.execute(
+            update(WeaveRepositorySnapshot)
+            .where(
+                WeaveRepositorySnapshot.organization_id == organization_id,
+                WeaveRepositorySnapshot.github_repository_id == repository_id,
+            )
+            .values(status="deleting")
+        )
+        await session.commit()
+
+
 async def delete_repository(
     organization_id: UUID,
     github_repository_id: int,
@@ -363,6 +384,7 @@ async def delete_repository(
 
         from cognee.modules.weave.native_memory import forget_repository
 
+        await _mark_repository_deleting(organization_id, github_repository_id)
         await forget_repository(binding, github_repository_id)
 
         async with scoped_database_context_variables(
@@ -401,7 +423,7 @@ async def delete_repository(
             invalidate_code_graph_snapshot_cache(dataset_id=binding.dataset_id)
 
         # Publish the tombstone only after every physical cleanup succeeds. A
-        # failed cleanup remains active and the same DELETE can safely retry.
+        # failed cleanup remains unavailable and the same DELETE can safely retry.
         await _publish_repository_transition(
             organization_id,
             github_repository_id,
@@ -470,6 +492,7 @@ async def _mark_organization_deleted(organization_id: UUID, lifecycle_generation
             raise SurfaceNotFound()
         deleted_at = _now()
         record.deleted_at = deleted_at
+        record.deletion_pending = False
         record.lifecycle_generation = lifecycle_generation
         record.observed_lifecycle_generation = max(
             record.observed_lifecycle_generation, lifecycle_generation
@@ -487,6 +510,7 @@ async def _mark_organization_deleted(organization_id: UUID, lifecycle_generation
             .where(WeaveRepositoryLifecycle.organization_id == organization_id)
             .values(
                 active=False,
+                deletion_pending=False,
                 lifecycle_generation=func.greatest(
                     WeaveRepositoryLifecycle.lifecycle_generation, lifecycle_generation
                 ),
@@ -516,6 +540,14 @@ async def delete_organization(organization_id: UUID, lifecycle_generation: int) 
             return DeleteResponse(organization_id=organization_id)
         from cognee.modules.weave.native_memory import forget_organization_memory
 
+        async with get_relational_engine().get_async_session() as session:
+            await set_weave_organization_scope(session, organization_id)
+            await session.execute(
+                update(WeaveOrganizationBinding)
+                .where(WeaveOrganizationBinding.organization_id == organization_id)
+                .values(deletion_pending=True)
+            )
+            await session.commit()
         await forget_organization_memory(binding)
         async with scoped_database_context_variables(
             binding.dataset_id,

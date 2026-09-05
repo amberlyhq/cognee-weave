@@ -3,7 +3,7 @@
 Cognee Weave is one private Railway service plus one PostgreSQL service with
 the `vector` extension. Neo4j is not deployed. Postgres stores the relational
 control plane, graph rows, and vectors. Each organization retains its primary
-control-plane binding; each repository has its own native memory dataset/schema.
+binding and one native memory dataset/schema shared by its repositories.
 
 ## Required runtime settings
 
@@ -90,18 +90,50 @@ existing project name. Set `WEAVE_PARITY_REPORT` to preserve its JSON receipt.
 
 `modules/weave/native_memory.py` delegates to the pinned upstream public
 `cognee.remember()` and `cognee.recall()` defaults. `remember()` retains native
-self-improvement through `improve()`. Repository replacement and deletion use
-`cognee.forget()`. Weave no longer supplies custom extraction tasks, prompts,
+self-improvement through `improve()`. Source replacement uses `cognee.update()`;
+individual source deletion uses `cognee.forget()`. Weave no longer supplies custom extraction tasks, prompts,
 graph models, or its own recall ranking. These public operation implementations
 and the upstream memory layer are unchanged by this alignment.
 
 The boundary still supplies tenant identity, repository selection, model
-credentials, deadlines, and exact-SHA receipts. A repository resolves only by
-organization, owner, tenant, and the deterministic native dataset name. Recall
-refuses legacy, failed, running, missing, or stale snapshots. Replacement takes
-the existing operation lock, forgets the previous repository dataset, and runs
-a full native rebuild. A failed replacement is unavailable, not an old index
-labelled current. This is not incremental per-file indexing.
+credentials and exact-SHA receipts. It adds no operation deadline around native
+Cognee calls; upstream timeouts remain unchanged. All repositories resolve to
+the customer's bound primary dataset. Recall refuses legacy, failed, running,
+missing or stale snapshots and incomplete source receipts. Replacement takes
+the existing customer operation lock and uses stable native source IDs. Cognee's
+directory resolver produces one code manifest per project plus supported docs;
+only changed items are updated. This is not per-symbol incremental indexing.
+
+### Source and completed-review lifecycle (2026-09-06)
+
+Apply migrations through `f2c4e6a8b0d1` before the service starts. Migration
+`d9a1c3e5f7b0` adds forced-tenant-RLS source receipts; `e1b3d5f7a9c0` adds review
+revision ordering; `f2c4e6a8b0d1` adds repository/customer cleanup-pending flags.
+These are integration records, not custom graph ownership.
+Reindex every customer repository to `weave-native-memory.v2`. Indexing does not
+wipe the customer dataset or siblings. Legacy per-repository datasets are retained
+during migration and excluded from recall; explicit repository removal also
+forgets that repository's legacy dataset.
+
+Deletion marks cleanup pending before removing native data. Failed cleanup keeps
+reads and reactivation blocked until deletion is retried successfully. Customer
+export checks every repository's native readiness, even with a repository filter.
+
+`POST /api/v1/weave/organizations/{id}/reviews/remember` accepts final historical
+review text, repository ID, review ID, PR head SHA, repository lifecycle generation
+and artifact revision. Dataset/user identity is always resolved server-side.
+New reviews use native `remember` (including its default `improve`). Corrections
+use native `update`, then `improve`; retries do not duplicate completed sources.
+An older artifact revision is ignored; conflicting text for the same revision
+is rejected. A processing receipt survives a failure and blocks partial recall.
+If initial remember fails during native improvement, its retry updates the source
+and finishes improvement before completing the receipt. Native exceptions remain
+unchanged; no custom pipeline-log interpretation is used.
+The request has a content size boundary, but no custom operation timer.
+
+Amberly's separate background workflow loads only completed, assessed reviews
+from the database. Finding changes atomically queue a refresh through its outbox.
+Memory is historical, untrusted context and never decides governance.
 
 Migration `c7e9f1a3b5d8` permits native deletion of admin-owned dataset schemas
 only after checking the organization scope and its bound native dataset. It

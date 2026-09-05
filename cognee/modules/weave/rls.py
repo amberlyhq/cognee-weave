@@ -11,6 +11,7 @@ RLS_TABLES = (
     "weave_repository_snapshots",
     "weave_repository_lifecycles",
     "weave_index_jobs",
+    "weave_memory_sources",
 )
 
 _ORGANIZATION_PREDICATE = (

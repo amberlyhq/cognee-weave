@@ -6,7 +6,6 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import text
 
-
 pytestmark = pytest.mark.skipif(
     os.getenv("DB_PROVIDER") != "postgres",
     reason="requires the real Postgres Weave control plane",
@@ -65,12 +64,12 @@ def _repository_node_id(request):
 
 @pytest.mark.asyncio
 async def test_every_surface_stays_scoped_through_repository_and_organization_deletion(
-    tmp_path, offline_native_recall
+    tmp_path, offline_native_recall, monkeypatch
 ):
     from cognee.context_global_variables import scoped_database_context_variables
+    from cognee.infrastructure.databases.graph import get_graph_engine
     from cognee.infrastructure.databases.graph.config import get_graph_context_config
     from cognee.infrastructure.databases.graph.get_graph_engine import graph_engine_cache
-    from cognee.infrastructure.databases.graph import get_graph_engine
     from cognee.infrastructure.databases.relational import get_relational_engine
     from cognee.infrastructure.databases.vector import get_vector_engine_async
     from cognee.infrastructure.databases.vector.config import get_vectordb_context_config
@@ -85,12 +84,17 @@ async def test_every_surface_stays_scoped_through_repository_and_organization_de
         visualize_organization,
     )
     from cognee.modules.weave.indexing import index_repository_archive
+    from cognee.modules.weave.memory_sources import source_records
+    from cognee.modules.weave.native_memory import (
+        customer_dataset,
+        repository_dataset,
+        repository_dataset_name,
+    )
     from cognee.modules.weave.organizations import (
         get_organization_binding,
         provision_organization,
     )
     from cognee.modules.weave.recall import recall
-    from cognee.modules.weave.native_memory import repository_dataset
 
     organization_a = uuid4()
     organization_b = uuid4()
@@ -133,14 +137,43 @@ async def test_every_surface_stays_scoped_through_repository_and_organization_de
         with pytest.raises(SurfaceNotFound, match="Resource not found"):
             await delete_repository(organization_a, repository_id, 1)
 
+    # Explicit cleanup still handles a retained V1 dataset independently of V2.
+    from cognee.modules.data.methods.create_authorized_dataset import create_authorized_dataset
+    from cognee.modules.users.methods import get_user
+
+    await create_authorized_dataset(
+        repository_dataset_name(organization_a, 940001), await get_user(binding_a.service_user_id)
+    )
+    assert await repository_dataset(binding_a, 940001) is not None
+    from cognee.modules.weave import deletion
+    from cognee.modules.weave.indexing import RepositoryDeletedError
+
+    async def fail_publication(*args, **kwargs):
+        raise RuntimeError("Injected failure after physical cleanup")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(deletion, "_publish_repository_transition", fail_publication)
+        with pytest.raises(RuntimeError, match="after physical cleanup"):
+            await delete_repository(organization_a, 940001, 2)
+    assert not await source_records(binding_a, 940001)
+    assert (await recall(organization_a, RecallRequest(query="Message"))).status == "unavailable"
+    with pytest.raises(SurfaceNotFound):
+        await export_organization(organization_a, [940002])
+    with pytest.raises(RuntimeError, match="cleanup is still pending"):
+        await activate_repository(organization_a, 940001, 3)
+    with pytest.raises(RepositoryDeletedError):
+        await index_repository_archive(inputs[0][0], _archive(tmp_path, "surface-alpha", "retry"))
     await delete_repository(organization_a, 940001, 2)
-    remaining_a = await recall(organization_a, RecallRequest(query="Message", deadline_ms=15000))
-    untouched_b = await recall(organization_b, RecallRequest(query="Message", deadline_ms=15000))
+    remaining_a = await recall(organization_a, RecallRequest(query="Message"))
+    untouched_b = await recall(organization_b, RecallRequest(query="Message"))
     assert {item.github_repository_id for item in remaining_a.repositories} == {940002}
     assert {item.github_repository_id for item in untouched_b.repositories} == {940003}
     assert await repository_dataset(binding_a, 940001) is None
-    assert await repository_dataset(binding_a, 940002) is not None
-    assert await repository_dataset(binding_b, 940003) is not None
+    assert await customer_dataset(binding_a) is not None
+    assert await customer_dataset(binding_b) is not None
+    assert not await source_records(binding_a, 940001)
+    assert await source_records(binding_a, 940002)
+    assert await source_records(binding_b, 940003)
 
     # Index delivery alone cannot revive a removed repository. Only the
     # separately verified GitHub installation lifecycle may reactivate it.
@@ -153,7 +186,7 @@ async def test_every_surface_stays_scoped_through_repository_and_organization_de
             _archive(tmp_path, alpha_request.repository_name, alpha_marker),
         )
     await activate_repository(organization_a, alpha_request.github_repository_id, 1)
-    still_removed = await recall(organization_a, RecallRequest(query="Message", deadline_ms=15000))
+    still_removed = await recall(organization_a, RecallRequest(query="Message"))
     assert {item.github_repository_id for item in still_removed.repositories} == {940002}
     await activate_repository(organization_a, alpha_request.github_repository_id, 3)
     object.__setattr__(alpha_request, "lifecycle_generation", 3)
@@ -161,11 +194,9 @@ async def test_every_surface_stays_scoped_through_repository_and_organization_de
         alpha_request,
         _archive(tmp_path, alpha_request.repository_name, alpha_marker),
     )
-    restored_a = await recall(organization_a, RecallRequest(query="Message", deadline_ms=15000))
+    restored_a = await recall(organization_a, RecallRequest(query="Message"))
     assert {item.github_repository_id for item in restored_a.repositories} == {940001, 940002}
-    assert (
-        await recall(organization_b, RecallRequest(query="Message", deadline_ms=15000))
-    ).status == "available"
+    assert (await recall(organization_b, RecallRequest(query="Message"))).status == "available"
 
     async with scoped_database_context_variables(
         binding_a.dataset_id,
@@ -190,6 +221,25 @@ async def test_every_surface_stays_scoped_through_repository_and_organization_de
 
     # An installation deletion governs organization existence even when a
     # newer repository event was observed first.
+    from cognee.modules.weave.organizations import (
+        OrganizationDeletedError,
+        reactivate_organization,
+    )
+
+    async def fail_organization_publication(*args, **kwargs):
+        raise RuntimeError("Injected organization tombstone failure")
+
+    with monkeypatch.context() as fault:
+        fault.setattr(deletion, "_mark_organization_deleted", fail_organization_publication)
+        with pytest.raises(RuntimeError, match="Injected organization tombstone failure"):
+            await delete_organization(organization_a, 2)
+    assert await get_organization_binding(organization_a) is None
+    assert (await recall(organization_a, RecallRequest(query="Message"))).status == "unavailable"
+    with pytest.raises(OrganizationDeletedError):
+        await provision_organization(organization_a)
+    with pytest.raises(OrganizationDeletedError):
+        await reactivate_organization(organization_a, 4)
+
     await delete_organization(organization_a, 2)
     assert not graph_engine_cache.is_cached(**graph_config_a)
     assert not vector_engine_cache.is_cached(**vector_config_a)
@@ -197,9 +247,7 @@ async def test_every_surface_stays_scoped_through_repository_and_organization_de
     assert vector_engine_cache.is_cached(**vector_config_b)
     assert await get_organization_binding(organization_a) is None
     assert (await recall(organization_a, RecallRequest(query="Message"))).status == "unavailable"
-    assert (
-        await recall(organization_b, RecallRequest(query="Message", deadline_ms=15000))
-    ).status == "available"
+    assert (await recall(organization_b, RecallRequest(query="Message"))).status == "available"
 
     engine = get_relational_engine()
     async with engine.get_async_session() as session:
@@ -211,11 +259,6 @@ async def test_every_surface_stays_scoped_through_repository_and_organization_de
 
     # Ordinary traffic cannot recreate a tombstoned organization. Only a newer
     # verified installation.created lifecycle generation can do that.
-    from cognee.modules.weave.organizations import (
-        OrganizationDeletedError,
-        reactivate_organization,
-    )
-
     with pytest.raises(OrganizationDeletedError):
         await provision_organization(organization_a)
     assert await reactivate_organization(organization_a, 1) is None

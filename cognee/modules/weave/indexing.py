@@ -319,7 +319,7 @@ class PostgresIndexStateStore:
                 .where(WeaveOrganizationBinding.organization_id == request.organization_id)
                 .with_for_update()
             )
-            if binding is None or binding.deleted_at is not None:
+            if binding is None or binding.deleted_at is not None or binding.deletion_pending:
                 raise LookupError("Organization not found")
             if request.lifecycle_generation < binding.lifecycle_generation:
                 raise RepositoryDeletedError(
@@ -342,6 +342,7 @@ class PostgresIndexStateStore:
             )
             if lifecycle is not None and (
                 not lifecycle.active
+                or lifecycle.deletion_pending
                 or request.lifecycle_generation < lifecycle.lifecycle_generation
             ):
                 raise RepositoryDeletedError(

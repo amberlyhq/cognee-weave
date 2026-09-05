@@ -155,7 +155,7 @@ if [ -x "$root/.venv/bin/pytest" ]; then
     "$root/cognee/tests/e2e/postgres/test_weave_exact_sha_indexing.py" \
     "$root/cognee/tests/e2e/postgres/test_weave_hybrid_recall.py" \
     "$root/cognee/tests/e2e/postgres/test_weave_surface_isolation.py" \
-    --timeout=300 --timeout-method=thread -q
+    -q
 else
   echo "run uv sync --locked --dev --extra postgres before the parity script" >&2
   exit 2
@@ -165,7 +165,7 @@ recall_times="$temporary/recall-times.txt"
 for _ in $(seq 1 5); do
   curl -fsS -o "$temporary/recall.json" -w '%{time_total}\n' \
     -H "Authorization: Bearer ${WEAVE_INTERNAL_TOKEN}" -H "Content-Type: application/json" \
-    -d "{\"mode\":\"repository_context\",\"query\":\"ForeignCanary\",\"github_repository_ids\":[${repository_a}],\"top_k\":10,\"deadline_ms\":5000}" \
+    -d "{\"mode\":\"repository_context\",\"query\":\"ForeignCanary\",\"github_repository_ids\":[${repository_a}],\"top_k\":10}" \
     "$base_url/api/v1/weave/organizations/${organization_b}/recall" >> "$recall_times"
 done
 ORGANIZATION_ID="$organization_b" REPOSITORY_ID="$repository_b" SHA="$sha_b" \

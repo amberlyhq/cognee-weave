@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from sqlalchemy import (
+    UUID,
     BigInteger,
     Boolean,
     Column,
@@ -10,7 +11,6 @@ from sqlalchemy import (
     Index,
     String,
     UniqueConstraint,
-    UUID,
 )
 from sqlalchemy.orm import validates
 
@@ -41,6 +41,7 @@ class WeaveOrganizationBinding(Base):
     deleted_at = Column(DateTime(timezone=True), nullable=True)
     lifecycle_generation = Column(BigInteger, nullable=False, default=0)
     observed_lifecycle_generation = Column(BigInteger, nullable=False, default=0)
+    deletion_pending = Column(Boolean, nullable=False, default=False, server_default="false")
 
     @validates("organization_id", "tenant_id", "service_user_id", "primary_dataset_id")
     def _keep_identity_immutable(self, key, value):
@@ -63,7 +64,30 @@ class WeaveRepositoryLifecycle(Base):
     github_repository_id = Column(BigInteger, primary_key=True)
     lifecycle_generation = Column(BigInteger, nullable=False, default=0)
     active = Column(Boolean, nullable=False, default=True)
+    deletion_pending = Column(Boolean, nullable=False, default=False, server_default="false")
     created_at = Column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+
+class WeaveMemorySource(Base):
+    """Integration receipts, not graph ownership or custom memory semantics.
+
+    No FK to Data: native update deletes and recreates that row under the same ID.
+    A processing receipt survives failures so recall cannot serve partial memory.
+    """
+
+    __tablename__ = "weave_memory_sources"
+    organization_id = Column(
+        UUID,
+        ForeignKey("weave_organization_bindings.organization_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    github_repository_id = Column(BigInteger, primary_key=True)
+    source_key = Column(String(1024), primary_key=True)
+    data_id = Column(UUID, nullable=False, unique=True)
+    content_hash = Column(String(64), nullable=False)
+    artifact_revision = Column(BigInteger, nullable=True)
+    status = Column(String(32), nullable=False)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
 
 

@@ -1,5 +1,5 @@
-from uuid import UUID
 import asyncio
+from uuid import UUID
 
 import pytest
 from pydantic import ValidationError
@@ -16,7 +16,6 @@ def test_recall_request_is_allow_listed_and_bounded():
         seeds=["symbol:Message"],
         top_k=25,
         depth=4,
-        deadline_ms=15000,
     )
 
     assert request.top_k == 25
@@ -31,7 +30,6 @@ def test_recall_request_is_allow_listed_and_bounded():
         "seeds",
         "top_k",
         "depth",
-        "deadline_ms",
     }
 
     rejected = (
@@ -41,7 +39,7 @@ def test_recall_request_is_allow_listed_and_bounded():
         {"mode": "repository_context", "query": "Message", "top_k": 26},
         {"mode": "repository_context", "query": "Message", "depth": 5},
         {"mode": "repository_context", "query": "Message", "primary_github_repository_id": 0},
-        {"mode": "repository_context", "query": "Message", "deadline_ms": 120001},
+        {"mode": "repository_context", "query": "Message", "deadline_ms": 100},
     )
     for payload in rejected:
         with pytest.raises(ValidationError):
@@ -158,8 +156,9 @@ def test_recall_statuses_are_explicit(status):
 @pytest.mark.asyncio
 async def test_recall_returns_safe_unavailable_when_organization_is_unknown(monkeypatch):
     from contextlib import asynccontextmanager
+
+    from cognee.modules.weave import indexing, organizations
     from cognee.modules.weave import recall as recall_module
-    from cognee.modules.weave import organizations, indexing
     from cognee.modules.weave.contracts import RecallRequest
 
     async def missing(_organization_id):
@@ -181,9 +180,9 @@ async def test_recall_returns_safe_unavailable_when_organization_is_unknown(monk
 
 
 @pytest.mark.asyncio
-async def test_recall_timeout_and_backend_errors_do_not_escape(monkeypatch):
-    from cognee.modules.weave import recall as recall_module
+async def test_recall_has_no_added_deadline_and_backend_errors_do_not_escape(monkeypatch):
     from cognee.modules.weave import native_memory
+    from cognee.modules.weave import recall as recall_module
     from cognee.modules.weave.contracts import RecallRequest
     from cognee.modules.weave.organizations import OrganizationBinding
 
@@ -200,8 +199,16 @@ async def test_recall_timeout_and_backend_errors_do_not_escape(monkeypatch):
     async def found(_organization_id):
         return binding
 
+    sentinel = object()
+
     async def slow(*_args, **_kwargs):
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0)
+        return sentinel
+
+    def forbidden_timeout(*_args, **_kwargs):
+        raise AssertionError("Weave must not wrap native recall in a timeout")
+
+    monkeypatch.setattr(asyncio, "timeout", forbidden_timeout)
 
     async def broken(*_args, **_kwargs):
         raise RuntimeError("secret database details")
@@ -210,7 +217,7 @@ async def test_recall_timeout_and_backend_errors_do_not_escape(monkeypatch):
     monkeypatch.setattr(native_memory, "recall_repository_memory", slow)
     timed_out = await recall_module.recall(
         organization_id,
-        RecallRequest(query="Message", deadline_ms=100),
+        RecallRequest(query="Message"),
     )
     monkeypatch.setattr(native_memory, "recall_repository_memory", broken)
     unavailable = await recall_module.recall(
@@ -218,8 +225,7 @@ async def test_recall_timeout_and_backend_errors_do_not_escape(monkeypatch):
         RecallRequest(query="Message"),
     )
 
-    assert timed_out.status == "timed_out"
-    assert timed_out.diagnostics[0].code == "deadline_exceeded"
+    assert timed_out is sentinel
     assert unavailable.status == "unavailable"
     assert unavailable.diagnostics[0].code == "backend_unavailable"
     assert "secret" not in unavailable.model_dump_json()
