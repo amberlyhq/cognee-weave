@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, timezone
 from typing import Literal
@@ -83,10 +84,56 @@ async def _read_surface(
     repository_ids: list[int],
     surface: Literal["export", "visualization"],
 ) -> SurfaceResponse:
+    async with weave_operation_lock(organization_id):
+        return await _read_locked_surface(organization_id, repository_ids, surface)
+
+
+async def _read_locked_surface(organization_id, repository_ids, surface) -> SurfaceResponse:
+    from cognee.modules.weave.native_memory import (
+        NATIVE_PIPELINE_VERSION,
+        repository_dataset,
+        snapshots_ready,
+    )
+
     binding = await get_organization_binding(organization_id)
     if binding is None:
         raise SurfaceNotFound()
     records = await _surface_snapshots(organization_id, repository_ids)
+    if len(records) > 20:
+        raise SurfaceNotFound()
+    if any(record.pipeline_version == NATIVE_PIPELINE_VERSION for record in records):
+        if not snapshots_ready(records):
+            raise SurfaceNotFound()
+        native = []
+        nodes_left, edges_left = 500, 1000
+        for record in records:
+            dataset = await repository_dataset(binding, record.github_repository_id)
+            if dataset is None:
+                raise SurfaceNotFound()
+            async with scoped_database_context_variables(dataset.id, binding.service_user_id):
+                graph = await get_graph_engine()
+                nodes, edges = await graph.get_filtered_graph_data(
+                    [], max_nodes=nodes_left, max_edges=edges_left
+                )
+            nodes_left -= len(nodes)
+            edges_left -= len(edges)
+            native.append(
+                {
+                    "github_repository_id": record.github_repository_id,
+                    "indexed_sha": record.indexed_sha,
+                    "nodes": nodes,
+                    "edges": edges,
+                }
+            )
+        payload = json.dumps(native, default=str, ensure_ascii=False)
+        if len(payload) > 1000000:
+            raise ValueError("Native graph exceeds the export size boundary")
+        return SurfaceResponse(
+            organization_id=organization_id,
+            surface=surface,
+            repositories=[_repository_reference(record) for record in records],
+            native_graph=payload,
+        )
     snapshots = {record.github_repository_id: record for record in records}
 
     async with scoped_database_context_variables(
@@ -314,6 +361,10 @@ async def delete_repository(
         if binding is None:
             raise SurfaceNotFound()
 
+        from cognee.modules.weave.native_memory import forget_repository
+
+        await forget_repository(binding, github_repository_id)
+
         async with scoped_database_context_variables(
             binding.dataset_id,
             binding.service_user_id,
@@ -463,6 +514,9 @@ async def delete_organization(organization_id: UUID, lifecycle_generation: int) 
         )
         if binding is None or database is None:
             return DeleteResponse(organization_id=organization_id)
+        from cognee.modules.weave.native_memory import forget_organization_memory
+
+        await forget_organization_memory(binding)
         async with scoped_database_context_variables(
             binding.dataset_id,
             binding.service_user_id,

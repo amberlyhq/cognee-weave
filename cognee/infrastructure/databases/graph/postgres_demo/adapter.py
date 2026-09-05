@@ -687,7 +687,7 @@ class PostgresDemoAdapter(GraphDBInterface):
         max_edges: int | None = None,
     ) -> Tuple[List[Tuple[str, Dict]], List[Tuple[str, str, str, Dict]]]:
         """Return core-field matches and the edges induced by those nodes."""
-        if not attribute_filters:
+        if not attribute_filters and max_nodes is None and max_edges is None:
             return await self.get_graph_data()
 
         filters: list[tuple[str, list[str]]] = []
@@ -697,7 +697,7 @@ class PostgresDemoAdapter(GraphDBInterface):
                     raise ValueError(f"Invalid filter attribute: {attr!r}")
                 filters.append((attr, [str(value) for value in filter_values]))
 
-        if not filters:
+        if not filters and max_nodes is None and max_edges is None:
             return await self.get_graph_data()
 
         if max_nodes is not None and max_nodes <= 0:
@@ -716,7 +716,7 @@ class PostgresDemoAdapter(GraphDBInterface):
             result = await session.execute(
                 text(
                     "SELECT id, name, type, properties FROM graph_node WHERE "
-                    + " AND ".join(clauses)
+                    + (" AND ".join(clauses) or "TRUE")
                     + " ORDER BY id"
                     + node_limit
                 ),

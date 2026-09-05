@@ -208,6 +208,12 @@ class LiteLLMEmbeddingEngine(EmbeddingEngine):
                         "api_base": self.endpoint,
                         "api_version": self.api_version,
                     }
+                    if os.getenv("WEAVE_STRICT_MODE") == "true" and (
+                        self.endpoint and urlparse(self.endpoint).hostname == "openrouter.ai"
+                    ):
+                        # The pinned LiteLLM OpenRouter embedding transport
+                        # forwards provider directly; extra_body is not flattened.
+                        embedding_kwargs["provider"] = {"zdr": True}
                     # Older LiteLLM releases serialize an omitted encoding format as null,
                     # which OpenRouter rejects (it only accepts "float"/"base64"). Cognee
                     # always consumes float vectors, so make the valid format explicit for

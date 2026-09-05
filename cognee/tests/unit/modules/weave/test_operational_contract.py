@@ -26,6 +26,7 @@ def strict_environment():
         "WEAVE_EMBEDDING_DIMENSIONS": "1536",
         "WEAVE_EMBEDDING_ENDPOINT": "https://openrouter.ai/api/v1",
         "WEAVE_EMBEDDING_API_KEY": "test-openrouter-key",
+        "LLM_API_KEY": "test-openrouter-key",
     }
     for prefix in ("VECTOR_DB", "GRAPH_DATABASE"):
         environment.update(
@@ -57,6 +58,7 @@ def test_strict_weave_runtime_accepts_only_the_all_postgres_tenant_boundary():
         ("WEAVE_EMBEDDING_DIMENSIONS", "384"),
         ("WEAVE_EMBEDDING_ENDPOINT", "https://example.invalid/v1"),
         ("WEAVE_EMBEDDING_API_KEY", ""),
+        ("LLM_API_KEY", ""),
         ("GRAPH_DATABASE_HOST", "another-postgres"),
         ("VECTOR_DB_NAME", "another_database"),
     ):

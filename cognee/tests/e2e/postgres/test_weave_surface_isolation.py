@@ -64,7 +64,9 @@ def _repository_node_id(request):
 
 
 @pytest.mark.asyncio
-async def test_every_surface_stays_scoped_through_repository_and_organization_deletion(tmp_path):
+async def test_every_surface_stays_scoped_through_repository_and_organization_deletion(
+    tmp_path, offline_native_recall
+):
     from cognee.context_global_variables import scoped_database_context_variables
     from cognee.infrastructure.databases.graph.config import get_graph_context_config
     from cognee.infrastructure.databases.graph.get_graph_engine import graph_engine_cache
@@ -88,6 +90,7 @@ async def test_every_surface_stays_scoped_through_repository_and_organization_de
         provision_organization,
     )
     from cognee.modules.weave.recall import recall
+    from cognee.modules.weave.native_memory import repository_dataset
 
     organization_a = uuid4()
     organization_b = uuid4()
@@ -122,6 +125,7 @@ async def test_every_surface_stays_scoped_through_repository_and_organization_de
         assert {item.github_repository_id for item in surface.repositories} == {940001, 940002}
         assert "SURFACE_CANARY" not in serialized
         assert "940003" not in serialized
+        assert surface.native_graph
 
     for repository_id in (940003, 949999):
         with pytest.raises(SurfaceNotFound, match="Resource not found"):
@@ -134,15 +138,9 @@ async def test_every_surface_stays_scoped_through_repository_and_organization_de
     untouched_b = await recall(organization_b, RecallRequest(query="Message", deadline_ms=15000))
     assert {item.github_repository_id for item in remaining_a.repositories} == {940002}
     assert {item.github_repository_id for item in untouched_b.repositories} == {940003}
-    deleted_repository_node = _repository_node_id(inputs[0][0])
-    async with scoped_database_context_variables(
-        binding_a.dataset_id,
-        binding_a.service_user_id,
-    ):
-        graph = await get_graph_engine()
-        vector = await get_vector_engine_async()
-        assert await graph.get_node(deleted_repository_node) is None
-        assert await vector.retrieve("CodeRepository_name", [deleted_repository_node]) == []
+    assert await repository_dataset(binding_a, 940001) is None
+    assert await repository_dataset(binding_a, 940002) is not None
+    assert await repository_dataset(binding_b, 940003) is not None
 
     # Index delivery alone cannot revive a removed repository. Only the
     # separately verified GitHub installation lifecycle may reactivate it.
@@ -174,7 +172,7 @@ async def test_every_surface_stays_scoped_through_repository_and_organization_de
         binding_a.service_user_id,
     ):
         await get_graph_engine()
-        await get_vector_engine_async()
+        (await get_vector_engine_async())._engine()
         graph_config_a = get_graph_context_config()
         vector_config_a = get_vectordb_context_config()
     async with scoped_database_context_variables(
@@ -182,7 +180,7 @@ async def test_every_surface_stays_scoped_through_repository_and_organization_de
         binding_b.service_user_id,
     ):
         await get_graph_engine()
-        await get_vector_engine_async()
+        (await get_vector_engine_async())._engine()
         graph_config_b = get_graph_context_config()
         vector_config_b = get_vectordb_context_config()
     assert graph_engine_cache.is_cached(**graph_config_a)

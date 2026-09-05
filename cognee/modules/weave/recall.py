@@ -65,15 +65,9 @@ async def recall(organization_id: UUID, request: RecallRequest) -> RecallRespons
 
     try:
         async with asyncio.timeout(request.deadline_ms / 1000):
-            binding = await get_organization_binding(organization_id)
-            if binding is None:
-                return _unavailable(
-                    organization_id,
-                    request,
-                    "unavailable",
-                    "organization_not_provisioned",
-                )
-            return await _recall_scoped(organization_id, binding, request)
+            from cognee.modules.weave.native_memory import recall_repository_memory
+
+            return await recall_repository_memory(organization_id, request)
     except TimeoutError:
         return _unavailable(organization_id, request, "timed_out", "deadline_exceeded")
     except Exception:

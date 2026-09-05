@@ -180,12 +180,31 @@ async def drop_pg_schema_if_exists(
     giving the shared-database handlers an atomic, single-statement cleanup that
     mirrors ``drop_pg_database_if_exists`` for the database-per-dataset mode.
     """
+    organization_id = None
+    if os.getenv("WEAVE_STRICT_MODE") == "true":
+        from cognee.modules.weave.scope import native_organization
+
+        organization_id = native_organization.get()
+        if organization_id is None:
+            raise ValueError("Native dataset deletion requires organization scope")
+        if not re.fullmatch(r"ds_[0-9a-f]{32}", schema):
+            raise ValueError("Invalid native dataset schema")
     engine = create_async_engine(
         _build_db_url(db_name, host, port, username, password),
         connect_args=_admin_connect_args(),
     )
     try:
         async with engine.begin() as connection:
+            if organization_id is not None:
+                await connection.execute(
+                    text("SELECT set_config('app.weave_organization_id', :org, true)"),
+                    {"org": str(organization_id)},
+                )
+                await connection.execute(
+                    text("SELECT public.weave_drop_native_dataset_schema(:org, :dataset)"),
+                    {"org": organization_id, "dataset": UUID(schema[3:])},
+                )
+                return
             await connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE;'))
     finally:
         await engine.dispose()

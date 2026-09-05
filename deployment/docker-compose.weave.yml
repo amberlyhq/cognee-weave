@@ -83,6 +83,11 @@ services:
       GRAPH_DATABASE_PASSWORD: ${WEAVE_DB_PASSWORD:?WEAVE_DB_PASSWORD is required}
       GRAPH_DATABASE_NAME: cognee_db
       WEAVE_EMBEDDING_PROVIDER: openrouter
+      LLM_PROVIDER: openai
+      LLM_MODEL: openrouter/openai/gpt-oss-120b
+      LLM_ENDPOINT: https://openrouter.ai/api/v1
+      LLM_API_KEY: ${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}
+      LLM_ARGS: '{"extra_body":{"provider":{"zdr":true}}}'
       WEAVE_EMBEDDING_MODEL: openrouter/openai/text-embedding-3-small
       WEAVE_EMBEDDING_DIMENSIONS: "1536"
       WEAVE_EMBEDDING_ENDPOINT: https://openrouter.ai/api/v1

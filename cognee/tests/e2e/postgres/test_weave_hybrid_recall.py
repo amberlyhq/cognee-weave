@@ -40,16 +40,19 @@ def _request(organization_id, repository_id, name, sha):
 
 
 @pytest.mark.asyncio
-async def test_hybrid_recall_crosses_repositories_but_never_organizations(tmp_path):
+async def test_native_recall_routes_repository_datasets_but_never_organizations(
+    tmp_path, offline_native_recall
+):
     from cognee.modules.weave.contracts import RecallRequest
     from cognee.modules.weave.indexing import index_repository_archive
     from cognee.modules.weave.organizations import provision_organization
     from cognee.modules.weave.recall import recall
+    from cognee.modules.weave.native_memory import repository_dataset
 
     organization_a = UUID("8e1a7b9d-08c2-4f57-9884-623e01b68a01")
     organization_b = UUID("8e1a7b9d-08c2-4f57-9884-623e01b68a02")
-    await provision_organization(organization_a)
-    await provision_organization(organization_b)
+    binding_a = await provision_organization(organization_a)
+    binding_b = await provision_organization(organization_b)
 
     inputs = (
         (_request(organization_a, 930001, "recall-alpha", "d" * 40), "alpha"),
@@ -73,16 +76,13 @@ async def test_hybrid_recall_crosses_repositories_but_never_organizations(tmp_pa
 
     assert response_a.status == "available"
     assert {item.github_repository_id for item in response_a.repositories} == {930001, 930002}
-    assert {item.github_repository_id for item in response_a.graph_candidates} == {
-        930001,
-        930002,
-    }
-    assert {item.github_repository_id for item in response_a.vector_candidates} == {
-        930001,
-        930002,
-    }
-    assert all(item.indexed_sha in {"d" * 40, "e" * 40} for item in response_a.graph_candidates)
+    assert not response_a.graph_candidates and not response_a.vector_candidates
+    assert response_a.native_memory
+    a_ids = {(await repository_dataset(binding_a, item)).id for item in (930001, 930002)}
+    b_id = (await repository_dataset(binding_b, 930003)).id
+    assert set(offline_native_recall[0][0]) == a_ids
+    assert offline_native_recall[0][1] == binding_a.service_user_id
+    assert b_id not in a_ids
     assert response_b.status == "available"
     assert {item.github_repository_id for item in response_b.repositories} == {930003}
-    assert all(item.github_repository_id == 930003 for item in response_b.graph_candidates)
-    assert all(item.github_repository_id == 930003 for item in response_b.vector_candidates)
+    assert offline_native_recall[1] == ([b_id], binding_b.service_user_id)

@@ -20,7 +20,7 @@ class RecallRequest(BaseModel):
     seeds: list[str] = Field(default_factory=list, max_length=10)
     top_k: int = Field(default=10, ge=1, le=25)
     depth: int = Field(default=1, ge=0, le=4)
-    deadline_ms: int = Field(default=5000, ge=100, le=15000)
+    deadline_ms: int = Field(default=60000, ge=100, le=120000)
 
     @field_validator("github_repository_ids")
     @classmethod
@@ -88,6 +88,7 @@ class RecallResponse(BaseModel):
     graph_candidates: list[RecallCandidate] = Field(default_factory=list, max_length=25)
     vector_candidates: list[RecallCandidate] = Field(default_factory=list, max_length=25)
     diagnostics: list[RecallDiagnostic] = Field(default_factory=list, max_length=5)
+    native_memory: Optional[str] = Field(default=None, max_length=64000)
 
 
 class SurfaceEdge(BaseModel):
@@ -108,6 +109,7 @@ class SurfaceResponse(BaseModel):
     repositories: list[RepositoryReference] = Field(default_factory=list, max_length=20)
     nodes: list[RecallCandidate] = Field(default_factory=list, max_length=500)
     edges: list[SurfaceEdge] = Field(default_factory=list, max_length=1000)
+    native_graph: Optional[str] = Field(default=None, max_length=1000000)
 
 
 class DeleteResponse(BaseModel):

@@ -98,10 +98,10 @@ assert value["organization_id"] == os.environ["RESTORE_ORGANIZATION_ID"]
 repository_id = int(os.environ["RESTORE_REPOSITORY_ID"])
 repositories = [item for item in value["repositories"] if item["github_repository_id"] == repository_id]
 assert repositories and repositories[0]["indexed_default_sha"]
-assert value["nodes"]
-assert value["edges"]
-assert all(item["github_repository_id"] == repository_id for item in value["nodes"])
-assert all(item["indexed_sha"] for item in value["nodes"])
+native = json.loads(value["native_graph"])
+assert native and native[0]["nodes"] and native[0]["edges"]
+assert all(item["github_repository_id"] == repository_id for item in native)
+assert all(item["indexed_sha"] for item in native)
 
 expected = json.loads(pathlib.Path(os.environ["RESTORE_EXPECTED_EXPORT"]).read_text())
 def normalized(item):

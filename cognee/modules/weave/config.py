@@ -2,6 +2,7 @@ import os
 from collections.abc import Mapping
 
 from cognee.infrastructure.databases.vector.embeddings.config import EmbeddingConfig
+from cognee.infrastructure.llm.config import LLMConfig
 
 
 _STRICT_RUNTIME_VALUES = {
@@ -47,6 +48,8 @@ def validate_weave_runtime_environment(
         values.get("WEAVE_EMBEDDING_API_KEY") or values.get("OPENROUTER_API_KEY") or ""
     ).strip():
         raise ValueError("WEAVE_EMBEDDING_API_KEY is required in strict Weave mode")
+    if not (values.get("LLM_API_KEY") or values.get("OPENROUTER_API_KEY") or "").strip():
+        raise ValueError("LLM_API_KEY is required in strict Weave mode")
 
 
 def get_internal_token() -> str:
@@ -72,4 +75,26 @@ def get_weave_embedding_config() -> EmbeddingConfig:
         embedding_api_key=os.getenv("WEAVE_EMBEDDING_API_KEY")
         or os.getenv("OPENROUTER_API_KEY")
         or None,
+    )
+
+
+def get_weave_llm_config() -> LLMConfig:
+    # BaseSettings would otherwise import unrelated per-stage routing from
+    # the host environment. Keep every native stage on the approved provider.
+    stage_routing = {
+        f"llm_{stage}_{field}": None if field.startswith("api_") else ""
+        for stage in ("extraction", "summarization", "query")
+        for field in ("model", "provider", "endpoint", "api_key", "api_version")
+    }
+    return LLMConfig(
+        **stage_routing,
+        structured_output_framework="litellm_native",
+        fallback_model="",
+        fallback_endpoint="",
+        fallback_api_key="",
+        llm_provider="openai",
+        llm_model="openrouter/openai/gpt-oss-120b",
+        llm_endpoint="https://openrouter.ai/api/v1",
+        llm_api_key=os.getenv("LLM_API_KEY") or os.getenv("OPENROUTER_API_KEY") or None,
+        llm_args={"extra_body": {"provider": {"zdr": True}}},
     )

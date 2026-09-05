@@ -10,6 +10,42 @@ from cognee.infrastructure.databases.vector.embeddings.LiteLLMEmbeddingEngine im
 
 
 @pytest.mark.asyncio
+async def test_strict_weave_embeddings_require_zdr_in_the_wire_body(monkeypatch):
+    import litellm
+    from litellm.utils import get_optional_params_embeddings
+    from litellm.llms.openrouter.embedding.transformation import OpenrouterEmbeddingConfig
+
+    monkeypatch.setenv("WEAVE_STRICT_MODE", "true")
+    monkeypatch.setenv("MOCK_EMBEDDING", "false")
+    wire = {}
+
+    async def provider(**kwargs):
+        optional = get_optional_params_embeddings(
+            model="openai/text-embedding-3-small",
+            custom_llm_provider="openrouter",
+            **{key: value for key, value in kwargs.items() if key in ("provider", "extra_body")},
+        )
+        wire.update(
+            OpenrouterEmbeddingConfig().transform_embedding_request(
+                "openai/text-embedding-3-small", ["test"], optional, {}
+            )
+        )
+        return SimpleNamespace(data=[{"embedding": [0.1, 0.2]}])
+
+    monkeypatch.setattr(litellm, "aembedding", provider)
+    with patch.object(LiteLLMEmbeddingEngine, "get_tokenizer", return_value=Mock()):
+        engine = LiteLLMEmbeddingEngine(
+            provider="openrouter",
+            model="openrouter/openai/text-embedding-3-small",
+            dimensions=2,
+            api_key="offline",
+            endpoint="https://openrouter.ai/api/v1",
+        )
+    await engine.embed_text(["test"])
+    assert wire.get("provider") == {"zdr": True}
+
+
+@pytest.mark.asyncio
 async def test_mock_embeddings_are_deterministic_nonzero_vectors_for_cosine_search(monkeypatch):
     monkeypatch.setenv("MOCK_EMBEDDING", "true")
     with patch.object(LiteLLMEmbeddingEngine, "get_tokenizer", return_value=Mock()):

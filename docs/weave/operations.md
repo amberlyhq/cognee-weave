@@ -2,8 +2,8 @@
 
 Cognee Weave is one private Railway service plus one PostgreSQL service with
 the `vector` extension. Neo4j is not deployed. Postgres stores the relational
-control plane, graph rows, vectors, and one dataset-derived schema per Amberly
-organization.
+control plane, graph rows, and vectors. Each organization retains its primary
+control-plane binding; each repository has its own native memory dataset/schema.
 
 ## Required runtime settings
 
@@ -21,6 +21,11 @@ WEAVE_EMBEDDING_MODEL=openrouter/openai/text-embedding-3-small
 WEAVE_EMBEDDING_DIMENSIONS=1536
 WEAVE_EMBEDDING_ENDPOINT=https://openrouter.ai/api/v1
 WEAVE_EMBEDDING_API_KEY=<OpenRouter API key>
+LLM_API_KEY=<OpenRouter API key>
+LLM_PROVIDER=openai
+LLM_MODEL=openrouter/openai/gpt-oss-120b
+LLM_ENDPOINT=https://openrouter.ai/api/v1
+LLM_ARGS={"extra_body":{"provider":{"zdr":true}}}
 ```
 
 The leading `openrouter/` is LiteLLM's routing prefix. The requested OpenRouter
@@ -61,6 +66,11 @@ with a non-secret placeholder key to exercise storage
 and tenant boundaries without credentials. Mock vectors are deterministic and
 nonzero so pgvector cosine search is defined. Mocked CI is not provider verification;
 never enable this flag for real indexing or recall.
+Offline recall tests stub the paid Cognee public operation and check dataset/user
+routing. The HTTP latency gate measures foreign-repository rejection, not native
+answer generation. Native answer quality and latency need a separate paid test.
+The host admin-role storage leg always uses mock embeddings, including when
+the strict runtime container is making approved live provider calls.
 The script creates a fresh Compose project containing
 only pgvector Postgres and the Weave API. Indexing runs synchronously in the API
 process, so no separate worker is required. The script provisions two test
@@ -75,6 +85,90 @@ The script removes its disposable volumes by default. It never targets an
 existing project name. Set `WEAVE_PARITY_REPORT` to preserve its JSON receipt.
 
 ## Deploy and verify
+
+### Native memory alignment (2026-09-05)
+
+`modules/weave/native_memory.py` delegates to the pinned upstream public
+`cognee.remember()` and `cognee.recall()` defaults. `remember()` retains native
+self-improvement through `improve()`. Repository replacement and deletion use
+`cognee.forget()`. Weave no longer supplies custom extraction tasks, prompts,
+graph models, or its own recall ranking. These public operation implementations
+and the upstream memory layer are unchanged by this alignment.
+
+The boundary still supplies tenant identity, repository selection, model
+credentials, deadlines, and exact-SHA receipts. A repository resolves only by
+organization, owner, tenant, and the deterministic native dataset name. Recall
+refuses legacy, failed, running, missing, or stale snapshots. Replacement takes
+the existing operation lock, forgets the previous repository dataset, and runs
+a full native rebuild. A failed replacement is unavailable, not an old index
+labelled current. This is not incremental per-file indexing.
+
+Migration `c7e9f1a3b5d8` permits native deletion of admin-owned dataset schemas
+only after checking the organization scope and its bound native dataset. It
+does not grant the runtime user database ownership. Apply it before running
+the new service. Older structural receipts must be reindexed; their contents
+are not silently treated as native memory.
+
+Recall returns `native_memory`, the serialized native response, separately from
+legacy symbol candidates. Amberly carries this as untrusted `nativeMemory`;
+it is not source-verified evidence and cannot decide governance. Export and
+visualization return `native_graph` with unmodified nodes/relationships and
+repository/SHA envelopes, capped at 500 nodes, 1,000 edges, and 1 MB of text.
+These are bounded inspection surfaces, not full database backups or a new UI.
+Amberly rejects a source-verified label on native memory; if old and native
+representations are mixed, its verifier keeps only the unverified native text.
+
+Live local comparison on `test-amberly-api` at
+`172add81fe83bb035b9b6f985adda3de7b6e01a4`:
+
+| Measurement | Earlier structural pilot | Native remember pilot |
+| --- | ---: | ---: |
+| Index time | 4.72 s, including queue | 31.93 s, operation wall time |
+| Graph nodes | 11 | 22 |
+| Relationships | 17 | 28 |
+| Vector rows | 11 | 22 |
+
+The native run covered three code/project files and one README; the hidden
+dependency file was skipped by upstream ingestion. New nodes included four
+entities, four entity types, one summary, one document, and one chunk. It added
+a `consumes` relationship to the shared contract. Two native recall queries
+took 16.28 s and 16.53 s. The shared-contract answer was correct; the function
+return-value question was not answered. Native code ingestion remains Enola's
+structural parsing; documentation uses LLM extraction and summarization. We
+did not force source code through a custom prose pipeline.
+
+A second live run through the Weave wrapper indexed in 43.17 s with 24 nodes
+and 31 edges; stochastic extraction explains count variation. Duplicate jobs
+made no new provider calls. Foreign recall, foreign schema deletion, native
+forget, recall-after-delete, and stale-job resurrection checks passed against
+disposable organizations. The original test index was retained.
+
+Models were OSS-120B internally and OpenAI `text-embedding-3-small` at 1,536
+dimensions. The direct pilot inspected 19 outgoing provider requests and
+required `provider.zdr=true` on every request. Chat uses `extra_body`; the
+pinned LiteLLM embedding path needs top-level `provider` to put this on the
+wire. This proves request routing, not an independent audit of provider
+retention. See [OpenRouter ZDR](https://openrouter.ai/docs/guides/features/zdr).
+Weave explicitly clears inherited per-stage and fallback routing settings so
+they cannot override the approved internal model or endpoint.
+
+The final local focused suite passed 187 Cognee unit tests. Four real-Postgres
+boundary tests passed, and the new migration passed downgrade/re-upgrade with
+function readback. Amberly passed 238 governance tests (eight database-specific
+tests skipped), typecheck, and changed-file lint/format checks. Review caught
+stage-model overrides, the non-strict parity embedding path, and a native-memory
+verification-label edge case; regression tests reproduced them before fixes.
+
+Verification is local source execution against the real Postgres adapters and
+live provider, not a rebuilt-image, production, or Luna-agent evaluation claim.
+The earlier image/parity results below predate this change. Re-run image,
+migration/restore, and deployment acceptance before release. A small-repository
+pilot cannot establish agent accuracy or token savings.
+
+Upstream contracts: [remember](https://docs.cognee.ai/core-concepts/main-operations/remember),
+[recall](https://docs.cognee.ai/core-concepts/main-operations/recall),
+[improve](https://docs.cognee.ai/core-concepts/main-operations/improve),
+[forget](https://docs.cognee.ai/core-concepts/main-operations/forget).
 
 ### OpenAI embedding verification (2026-09-05)
 

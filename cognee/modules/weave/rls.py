@@ -1,4 +1,8 @@
 from sqlalchemy import text
+from cognee.alembic.versions.c7e9f1a3b5d8_native_weave_dataset_deletion import (
+    DROP_NATIVE_SCHEMA_FUNCTION,
+    NATIVE_SCHEMA_GRANT,
+)
 
 from cognee.infrastructure.databases.relational import get_relational_engine
 
@@ -112,6 +116,13 @@ async def ensure_weave_rls_policies() -> None:
             )
         await session.execute(text(_CREATE_SCHEMA_FUNCTION))
         await session.execute(text(_DROP_ORGANIZATION_SCHEMA_FUNCTION))
+        await session.execute(text(DROP_NATIVE_SCHEMA_FUNCTION))
+        await session.execute(
+            text(
+                "REVOKE ALL ON FUNCTION public.weave_drop_native_dataset_schema(uuid, uuid) FROM PUBLIC"
+            )
+        )
+        await session.execute(text(NATIVE_SCHEMA_GRANT))
         await session.execute(
             text(
                 "REVOKE ALL ON FUNCTION "

@@ -564,14 +564,11 @@ async def index_repository_archive(
 ) -> IndexJobState:
     """Validate and index one exact GitHub default-branch archive."""
 
-    from cognee.context_global_variables import scoped_database_context_variables
-    from cognee.modules.run_custom_pipeline.run_custom_pipeline import run_custom_pipeline
-    from cognee.modules.users.methods import get_user
     from cognee.modules.weave.archive import UnsafeArchiveError, validated_archive
-    from cognee.modules.weave.config import get_weave_embedding_config
-    from cognee.tasks.code_graph.extract_code_graph import get_code_graph_tasks
-    from cognee.tasks.code_graph.models import RepositoryProvenance
+    from cognee.modules.weave.native_memory import NATIVE_PIPELINE_VERSION, remember_repository
 
+    # Old parser-only receipts cannot satisfy native-memory indexing.
+    request = replace(request, pipeline_version=NATIVE_PIPELINE_VERSION)
     store = store or PostgresIndexStateStore()
     async with weave_operation_lock(request.organization_id, request.github_repository_id):
         binding = await get_organization_binding(request.organization_id)
@@ -581,39 +578,9 @@ async def index_repository_archive(
         if not await store.claim(request.organization_id, job.id):
             return job
 
-        provenance = RepositoryProvenance(
-            organization_id=request.organization_id,
-            github_repository_id=request.github_repository_id,
-            repository_owner=request.repository_owner,
-            repository_name=request.repository_name,
-            indexed_sha=request.requested_sha,
-            pipeline_version=request.pipeline_version,
-            extraction_version=request.extraction_version,
-        )
-        embedding_config = get_weave_embedding_config()
         try:
             with validated_archive(archive_path) as repository:
-                service_user = await get_user(binding.service_user_id)
-                async with scoped_database_context_variables(
-                    binding.dataset_id,
-                    binding.service_user_id,
-                    embedding_config=embedding_config,
-                ):
-                    await run_custom_pipeline(
-                        tasks=get_code_graph_tasks(
-                            repository,
-                            index_vectors=True,
-                            repository_provenance=provenance,
-                        ),
-                        data=str(repository),
-                        dataset=binding.dataset_id,
-                        user=service_user,
-                        pipeline_name="weave_exact_sha_code_graph",
-                        use_pipeline_cache=False,
-                        run_in_background=False,
-                        skip_connection_test=True,
-                        embedding_config=embedding_config,
-                    )
+                await remember_repository(binding, request, repository)
             await store.succeed(request.organization_id, job.id, request.requested_sha)
         except UnsafeArchiveError:
             await store.fail(request.organization_id, job.id, "archive_invalid")

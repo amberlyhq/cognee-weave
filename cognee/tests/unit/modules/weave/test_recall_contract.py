@@ -41,7 +41,7 @@ def test_recall_request_is_allow_listed_and_bounded():
         {"mode": "repository_context", "query": "Message", "top_k": 26},
         {"mode": "repository_context", "query": "Message", "depth": 5},
         {"mode": "repository_context", "query": "Message", "primary_github_repository_id": 0},
-        {"mode": "repository_context", "query": "Message", "deadline_ms": 15001},
+        {"mode": "repository_context", "query": "Message", "deadline_ms": 120001},
     )
     for payload in rejected:
         with pytest.raises(ValidationError):
@@ -157,13 +157,20 @@ def test_recall_statuses_are_explicit(status):
 
 @pytest.mark.asyncio
 async def test_recall_returns_safe_unavailable_when_organization_is_unknown(monkeypatch):
+    from contextlib import asynccontextmanager
     from cognee.modules.weave import recall as recall_module
+    from cognee.modules.weave import organizations, indexing
     from cognee.modules.weave.contracts import RecallRequest
 
     async def missing(_organization_id):
         return None
 
-    monkeypatch.setattr(recall_module, "get_organization_binding", missing)
+    @asynccontextmanager
+    async def unlocked(*args):
+        yield
+
+    monkeypatch.setattr(organizations, "get_organization_binding", missing)
+    monkeypatch.setattr(indexing, "weave_operation_lock", unlocked)
     response = await recall_module.recall(
         UUID("7e1a7b9d-08c2-4f57-9884-623e01b68a01"),
         RecallRequest(query="Message"),
@@ -176,6 +183,7 @@ async def test_recall_returns_safe_unavailable_when_organization_is_unknown(monk
 @pytest.mark.asyncio
 async def test_recall_timeout_and_backend_errors_do_not_escape(monkeypatch):
     from cognee.modules.weave import recall as recall_module
+    from cognee.modules.weave import native_memory
     from cognee.modules.weave.contracts import RecallRequest
     from cognee.modules.weave.organizations import OrganizationBinding
 
@@ -199,12 +207,12 @@ async def test_recall_timeout_and_backend_errors_do_not_escape(monkeypatch):
         raise RuntimeError("secret database details")
 
     monkeypatch.setattr(recall_module, "get_organization_binding", found)
-    monkeypatch.setattr(recall_module, "_recall_scoped", slow)
+    monkeypatch.setattr(native_memory, "recall_repository_memory", slow)
     timed_out = await recall_module.recall(
         organization_id,
         RecallRequest(query="Message", deadline_ms=100),
     )
-    monkeypatch.setattr(recall_module, "_recall_scoped", broken)
+    monkeypatch.setattr(native_memory, "recall_repository_memory", broken)
     unavailable = await recall_module.recall(
         organization_id,
         RecallRequest(query="Message"),
