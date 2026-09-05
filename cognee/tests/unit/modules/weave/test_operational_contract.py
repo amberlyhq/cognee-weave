@@ -21,6 +21,11 @@ def strict_environment():
         "VECTOR_DATASET_DATABASE_HANDLER": "pgvector_shared",
         "GRAPH_DATABASE_PROVIDER": "postgres_demo",
         "GRAPH_DATASET_DATABASE_HANDLER": "postgres_graph_shared",
+        "WEAVE_EMBEDDING_PROVIDER": "openrouter",
+        "WEAVE_EMBEDDING_MODEL": "openrouter/openai/text-embedding-3-small",
+        "WEAVE_EMBEDDING_DIMENSIONS": "1536",
+        "WEAVE_EMBEDDING_ENDPOINT": "https://openrouter.ai/api/v1",
+        "WEAVE_EMBEDDING_API_KEY": "test-openrouter-key",
     }
     for prefix in ("VECTOR_DB", "GRAPH_DATABASE"):
         environment.update(
@@ -47,6 +52,11 @@ def test_strict_weave_runtime_accepts_only_the_all_postgres_tenant_boundary():
         ("VECTOR_DATASET_DATABASE_HANDLER", "pgvector"),
         ("GRAPH_DATABASE_PROVIDER", "neo4j"),
         ("GRAPH_DATASET_DATABASE_HANDLER", "neo4j_community"),
+        ("WEAVE_EMBEDDING_PROVIDER", "fastembed"),
+        ("WEAVE_EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5"),
+        ("WEAVE_EMBEDDING_DIMENSIONS", "384"),
+        ("WEAVE_EMBEDDING_ENDPOINT", "https://example.invalid/v1"),
+        ("WEAVE_EMBEDDING_API_KEY", ""),
         ("GRAPH_DATABASE_HOST", "another-postgres"),
         ("VECTOR_DB_NAME", "another_database"),
     ):
@@ -222,6 +232,10 @@ def test_operations_and_parity_docs_keep_neo4j_out_of_the_runtime():
     compose = (ROOT / "deployment/docker-compose.weave.yml").read_text()
     assert "GRAPH_DATABASE_PROVIDER=postgres_demo" in operations
     assert "VECTOR_DB_PROVIDER=pgvector" in operations
+    assert "WEAVE_EMBEDDING_PROVIDER=openrouter" in operations
+    assert "WEAVE_EMBEDDING_MODEL=openrouter/openai/text-embedding-3-small" in operations
+    assert "WEAVE_EMBEDDING_DIMENSIONS=1536" in operations
+    assert "WEAVE_EMBEDDING_ENDPOINT=https://openrouter.ai/api/v1" in operations
     assert "Neo4j is not deployed" in operations
     assert "Production parity is not claimed" in parity
     assert "zero cross-organization candidates" in parity
@@ -229,11 +243,15 @@ def test_operations_and_parity_docs_keep_neo4j_out_of_the_runtime():
     assert "image: cognee-weave-parity:local" in compose
     assert "WEAVE_PARITY_SKIP_BUILD" in parity
     assert 'WEAVE_STRICT_MODE: "true"' in compose
+    assert "WEAVE_EMBEDDING_PROVIDER: openrouter" in compose
+    assert "WEAVE_EMBEDDING_MODEL: openrouter/openai/text-embedding-3-small" in compose
+    assert 'WEAVE_EMBEDDING_DIMENSIONS: "1536"' in compose
+    assert "WEAVE_EMBEDDING_ENDPOINT: https://openrouter.ai/api/v1" in compose
+    assert "WEAVE_EMBEDDING_API_KEY: ${OPENROUTER_API_KEY" in compose
     dockerfile = (ROOT / "Dockerfile").read_text()
     assert "install_enola()" in dockerfile
-    assert "AutoTokenizer.from_pretrained" in dockerfile
-    assert "TextEmbedding" in dockerfile
-    assert "weave image warmup" in dockerfile
+    assert "BAAI/bge-small-en-v1.5" not in dockerfile
+    assert "weave image warmup" not in dockerfile
     assert "ENOLA_AUTO_INSTALL=false" in dockerfile
     assert "ENOLA_PATH=/app/.cognee/bin/enola-0.3.13-linux-arm64" in dockerfile
     assert "ENOLA_PATH: /app/.cognee/bin/enola-0.3.13-linux-arm64" in compose

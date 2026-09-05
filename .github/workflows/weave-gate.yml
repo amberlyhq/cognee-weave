@@ -60,6 +60,8 @@ jobs:
           --health-retries 10
     env:
       ENV: dev
+      OPENROUTER_API_KEY: offline-test-placeholder
+      MOCK_EMBEDDING: "true"
       ENABLE_BACKEND_ACCESS_CONTROL: "true"
       DB_PROVIDER: postgres
       DB_HOST: 127.0.0.1
@@ -116,4 +118,8 @@ jobs:
       - name: Run local high-confidence secret scan
         run: scripts/weave-secret-scan.sh
       - name: Run full image, isolation, performance, and restore parity
+        env:
+          OPENROUTER_API_KEY: offline-test-placeholder
+          WEAVE_MOCK_EMBEDDING: "true"
+          MOCK_EMBEDDING: "true"
         run: scripts/weave-parity.sh

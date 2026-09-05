@@ -189,20 +189,23 @@ def test_code_graph_provenance_never_persists_the_temporary_checkout_path():
     assert "/private/tmp" not in str(symbol.model_dump())
 
 
-def test_weave_uses_local_embeddings_without_an_api_key_by_default(monkeypatch):
+def test_weave_uses_openai_small_embeddings_through_openrouter_by_default(monkeypatch):
     from cognee.modules.weave.config import get_weave_embedding_config
 
     for name in (
         "WEAVE_EMBEDDING_PROVIDER",
         "WEAVE_EMBEDDING_MODEL",
         "WEAVE_EMBEDDING_DIMENSIONS",
+        "WEAVE_EMBEDDING_ENDPOINT",
         "WEAVE_EMBEDDING_API_KEY",
     ):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
 
     config = get_weave_embedding_config()
 
-    assert config.embedding_provider == "fastembed"
-    assert config.embedding_model == "BAAI/bge-small-en-v1.5"
-    assert config.embedding_dimensions == 384
-    assert config.embedding_api_key is None
+    assert config.embedding_provider == "openrouter"
+    assert config.embedding_model == "openrouter/openai/text-embedding-3-small"
+    assert config.embedding_dimensions == 1536
+    assert config.embedding_endpoint == "https://openrouter.ai/api/v1"
+    assert config.embedding_api_key == "test-openrouter-key"

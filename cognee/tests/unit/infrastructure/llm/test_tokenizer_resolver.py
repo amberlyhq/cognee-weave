@@ -55,6 +55,12 @@ def test_openai_uses_tiktoken_with_bare_model():
     assert tok.kwargs["model"] == "text-embedding-3-large"
 
 
+def test_openrouter_openai_small_uses_matching_tiktoken_without_huggingface():
+    tok = _resolve(provider="openrouter", model="openrouter/openai/text-embedding-3-small")
+    assert tok.kind == "tiktoken"
+    assert tok.kwargs["model"] == "text-embedding-3-small"
+
+
 def test_gemini_uses_default_tiktoken():
     tok = _resolve(provider="gemini", model="gemini/text-embedding-004")
     assert tok.kind == "tiktoken"

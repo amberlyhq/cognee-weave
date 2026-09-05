@@ -149,6 +149,10 @@ def resolve_embedding_tokenizer(
     provider_lower = (provider or "").lower()
     bare = _bare_model(model)
 
+    if provider_lower == "openrouter" and (model or "").startswith("openrouter/openai/"):
+        provider_lower = "openai"
+        bare = model.removeprefix("openrouter/openai/")
+
     if "openai" in provider_lower and "compatible" not in provider_lower:
         # tiktoken.encoding_for_model raises KeyError on a model it does not know
         # (e.g. a newly released embedding model), so guard the "never raises"

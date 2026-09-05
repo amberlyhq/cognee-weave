@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import math
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -6,6 +7,20 @@ import pytest
 from cognee.infrastructure.databases.vector.embeddings.LiteLLMEmbeddingEngine import (
     LiteLLMEmbeddingEngine,
 )
+
+
+@pytest.mark.asyncio
+async def test_mock_embeddings_are_deterministic_nonzero_vectors_for_cosine_search(monkeypatch):
+    monkeypatch.setenv("MOCK_EMBEDDING", "true")
+    with patch.object(LiteLLMEmbeddingEngine, "get_tokenizer", return_value=Mock()):
+        engine = LiteLLMEmbeddingEngine(dimensions=1536)
+    with patch("litellm.aembedding", side_effect=AssertionError("mock must not call provider")):
+        vectors = await engine.embed_text(["AlphaCanary", "BetaCanary", "AlphaCanary"])
+    assert all(len(vector) == 1536 for vector in vectors)
+    assert all(sum(value * value for value in vector) > 0 for vector in vectors)
+    assert all(math.isfinite(value) for vector in vectors for value in vector)
+    assert vectors[0] == vectors[2]
+    assert vectors[0] != vectors[1]
 
 
 @pytest.mark.asyncio

@@ -16,10 +16,20 @@ VECTOR_DATASET_DATABASE_HANDLER=pgvector_shared
 GRAPH_DATABASE_PROVIDER=postgres_demo
 GRAPH_DATASET_DATABASE_HANDLER=postgres_graph_shared
 WEAVE_INTERNAL_TOKEN=<at least 32 random characters>
-WEAVE_EMBEDDING_PROVIDER=fastembed
-WEAVE_EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
-WEAVE_EMBEDDING_DIMENSIONS=384
+WEAVE_EMBEDDING_PROVIDER=openrouter
+WEAVE_EMBEDDING_MODEL=openrouter/openai/text-embedding-3-small
+WEAVE_EMBEDDING_DIMENSIONS=1536
+WEAVE_EMBEDDING_ENDPOINT=https://openrouter.ai/api/v1
+WEAVE_EMBEDDING_API_KEY=<OpenRouter API key>
 ```
+
+The leading `openrouter/` is LiteLLM's routing prefix. The requested OpenRouter
+model is `openai/text-embedding-3-small`. Compose reads `OPENROUTER_API_KEY`
+and supplies it as `WEAVE_EMBEDDING_API_KEY`; direct runs accept either variable.
+Repository-derived text is sent to this provider for indexing and query embeddings.
+Provider contract: [OpenRouter embeddings API](https://openrouter.ai/docs/api/api-reference/embeddings/create-embeddings).
+Existing 384-dimensional FastEmbed datasets must be rebuilt in fresh storage before
+switching traffic. Changing configuration alone does not convert existing vectors.
 
 Use two Postgres users against the same private database:
 
@@ -44,7 +54,14 @@ tenant, graph, or vector provider setting drifts from this all-Postgres shape.
 
 ## Local parity stack
 
-Run `scripts/weave-parity.sh`. It creates a fresh Compose project containing
+Export `OPENROUTER_API_KEY`, then run `scripts/weave-parity.sh`. This makes paid
+embedding requests with synthetic test repositories. CI instead sets
+`WEAVE_MOCK_EMBEDDING=true` (Compose) and `MOCK_EMBEDDING=true` (host tests)
+with a non-secret placeholder key to exercise storage
+and tenant boundaries without credentials. Mock vectors are deterministic and
+nonzero so pgvector cosine search is defined. Mocked CI is not provider verification;
+never enable this flag for real indexing or recall.
+The script creates a fresh Compose project containing
 only pgvector Postgres and the Weave API. Indexing runs synchronously in the API
 process, so no separate worker is required. The script provisions two test
 organizations, indexes exact fixture SHAs, runs the Postgres isolation suite,
@@ -58,6 +75,24 @@ The script removes its disposable volumes by default. It never targets an
 existing project name. Set `WEAVE_PARITY_REPORT` to preserve its JSON receipt.
 
 ## Deploy and verify
+
+### OpenAI embedding verification (2026-09-05)
+
+The maintained fork unit gate plus embedding/tokenizer regressions passed 185
+tests; the fork Ruff correctness gate passed. Local provider verification used
+OpenRouter with mocking disabled and obtained nonzero 1536-dimensional vectors.
+The private `amberlyhq/test-amberly-api` repository at
+`172add81fe83bb035b9b6f985adda3de7b6e01a4` indexed into fresh PostgreSQL storage.
+The live provider run indexed it successfully in 4.1 seconds.
+Symbol, repository, and impact recall returned the indexed SHA with graph and
+vector candidates and no diagnostics. All 12 vector columns were `vector(1536)`.
+A second organization returned no candidates. This verifies the model change
+locally; production rollout and rebuilding older 384-dimensional datasets remain
+deployment steps. CI uses mock embeddings and makes no provider-quality claim.
+The credential-free `scripts/weave-parity.sh` run passed all 12 PostgreSQL tests,
+created 28 HNSW indexes, observed zero cross-organization leaks, and passed
+runtime lifecycle and backup/restore checks. Review findings about host mock
+configuration and zero-vector cosine distances were reproduced and corrected.
 
 1. Build the reviewed `Dockerfile` with one private pgvector Postgres service.
 2. Bootstrap the `cognee` runtime role with a separate password. Run migrations

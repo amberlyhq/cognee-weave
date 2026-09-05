@@ -82,9 +82,12 @@ services:
       GRAPH_DATABASE_USERNAME: cognee
       GRAPH_DATABASE_PASSWORD: ${WEAVE_DB_PASSWORD:?WEAVE_DB_PASSWORD is required}
       GRAPH_DATABASE_NAME: cognee_db
-      WEAVE_EMBEDDING_PROVIDER: fastembed
-      WEAVE_EMBEDDING_MODEL: BAAI/bge-small-en-v1.5
-      WEAVE_EMBEDDING_DIMENSIONS: "384"
+      WEAVE_EMBEDDING_PROVIDER: openrouter
+      WEAVE_EMBEDDING_MODEL: openrouter/openai/text-embedding-3-small
+      WEAVE_EMBEDDING_DIMENSIONS: "1536"
+      WEAVE_EMBEDDING_ENDPOINT: https://openrouter.ai/api/v1
+      WEAVE_EMBEDDING_API_KEY: ${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}
+      MOCK_EMBEDDING: ${WEAVE_MOCK_EMBEDDING:-false}
       ENOLA_PATH: /app/.cognee/bin/enola-0.3.13-linux-arm64
       ENOLA_AUTO_INSTALL: "false"
       COGNEE_SKIP_CONNECTION_TEST: "true"

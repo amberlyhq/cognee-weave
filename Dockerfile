@@ -126,8 +126,7 @@ RUN python -c "from cognee_db_workers._kuzu_helpers import install_json_extensio
 # customer request. Keep each asset in its own build layer so a slow provider
 # cannot throw away downloads that already finished.
 RUN python -c "from cognee.tasks.code_graph.install_enola import install_enola; install_enola()"
-RUN python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('BAAI/bge-small-en-v1.5')"
-RUN python -c "from fastembed import TextEmbedding; list(TextEmbedding(model_name='BAAI/bge-small-en-v1.5').embed(['weave image warmup']))"
+RUN python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
 
 ENV ENOLA_AUTO_INSTALL=false
 ENV ENOLA_PATH=/app/.cognee/bin/enola-0.3.13-linux-arm64

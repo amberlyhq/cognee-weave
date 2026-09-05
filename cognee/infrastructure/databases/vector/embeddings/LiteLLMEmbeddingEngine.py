@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import logging
 
 from cognee.shared.logging_utils import get_logger
@@ -188,10 +189,16 @@ class LiteLLMEmbeddingEngine(EmbeddingEngine):
 
         try:
             if self.mock:
-                response = {
-                    "data": [{"embedding": [0.0] * self.dimensions} for _ in sanitized_text_input]
-                }
-                return [data["embedding"] for data in response["data"]]
+                # Zero vectors have undefined cosine distance and are omitted by
+                # pgvector HNSW. Stable fake vectors exercise storage/retrieval,
+                # but intentionally make no claim about semantic similarity.
+                return [
+                    [
+                        byte / 127.5 - 1.0
+                        for byte in hashlib.shake_256(item.encode("utf-8")).digest(self.dimensions)
+                    ]
+                    for item in sanitized_text_input
+                ]
             else:
                 async with embedding_rate_limiter_context_manager():
                     embedding_kwargs = {
