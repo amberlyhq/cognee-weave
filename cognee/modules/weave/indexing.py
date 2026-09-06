@@ -131,8 +131,11 @@ class InMemoryIndexStateStore:
             existing_id = self._identities.get(identity)
             if existing_id is not None:
                 existing = self.jobs[existing_id]
-                if existing.status == "failed" or (
-                    reclaim_running and existing.status == "running"
+                snapshot = self.snapshots[self._key(request)]
+                if (
+                    existing.status in {"failed", "superseded"}
+                    or (reclaim_running and existing.status == "running")
+                    or not self._is_current(snapshot, request)
                 ):
                     existing = replace(
                         existing,
@@ -143,6 +146,17 @@ class InMemoryIndexStateStore:
                         completed_at=None,
                     )
                     self.jobs[existing.id] = existing
+                    self.snapshots[self._key(request)] = replace(
+                        snapshot,
+                        repository_owner=request.repository_owner,
+                        repository_name=request.repository_name,
+                        default_branch=request.default_branch,
+                        requested_sha=request.requested_sha,
+                        pipeline_version=request.pipeline_version,
+                        extraction_version=request.extraction_version,
+                        status="queued",
+                        error_code=None,
+                    )
                 return existing
 
             job = IndexJobState(id=uuid4(), request=request)
@@ -378,9 +392,12 @@ class PostgresIndexStateStore:
                 if snapshot is None:
                     raise RuntimeError("Index job exists without repository snapshot")
                 if (
-                    job.status == "failed"
+                    job.status in {"failed", "superseded"}
                     or (reclaim_running and job.status == "running")
                     or snapshot.status == "not_indexed"
+                    # A historical receipt does not describe the current native sources.
+                    # A -> B -> A must restore A before publishing its snapshot again.
+                    or not _orm_job_is_current(job, snapshot)
                 ):
                     job.status = "queued"
                     job.error_code = None

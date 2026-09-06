@@ -209,3 +209,36 @@ def test_weave_uses_openai_small_embeddings_through_openrouter_by_default(monkey
     assert config.embedding_dimensions == 1536
     assert config.embedding_endpoint == "https://openrouter.ai/api/v1"
     assert config.embedding_api_key == "test-openrouter-key"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("previous_status", ["succeeded", "superseded", "failed", "queued"])
+async def test_return_to_previous_commit_requeues_and_promotes_current_snapshot(previous_status):
+    from cognee.modules.weave.indexing import InMemoryIndexStateStore
+
+    store = InMemoryIndexStateStore()
+    first = _request()
+    second = _request(organization_id=first.organization_id, requested_sha="b" * 40)
+    job_a = await store.accept(first)
+    if previous_status == "succeeded":
+        assert await store.claim(job_a.id)
+        await store.succeed(job_a.id, first.requested_sha)
+    elif previous_status == "failed":
+        await store.fail(job_a.id, "indexing_failed")
+    job_b = await store.accept(second)
+    if previous_status == "superseded":
+        assert not await store.claim(job_a.id)
+    assert await store.claim(job_b.id)
+    await store.succeed(job_b.id, second.requested_sha)
+
+    returned = await store.accept(first)
+    assert returned.status == "queued"
+    assert store.current(first).requested_sha == first.requested_sha
+    assert store.current(first).status == "queued"
+    assert await store.claim(returned.id)
+    await store.succeed(returned.id, first.requested_sha)
+    assert store.current(first).indexed_sha == first.requested_sha
+    assert store.current(first).status == "indexed"
+    duplicate = await store.accept(first)
+    assert duplicate.status == "succeeded"
+    assert duplicate.attempt_count == returned.attempt_count

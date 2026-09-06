@@ -131,3 +131,50 @@ async def test_remember_improvement_failure_is_recorded_and_retried(tmp_path, mo
     assert snapshots_ready(await customer_snapshots(binding.organization_id))
     assert {r.status for r in await source_records(binding)} == {"completed"}
     await delete_organization(binding.organization_id, 1)
+
+
+@pytest.mark.asyncio
+async def test_return_to_previous_commit_restores_native_sources(tmp_path):
+    from uuid import uuid4
+
+    from cognee.modules.weave.deletion import delete_organization
+    from cognee.modules.weave.indexing import index_repository_archive
+    from cognee.modules.weave.memory_sources import source_records
+    from cognee.modules.weave.native_memory import customer_snapshots
+    from cognee.modules.weave.organizations import provision_organization
+
+    binding = await provision_organization(uuid4())
+    repo = 920020
+    requests = [_request(binding.organization_id, repo, "returning", sha * 40) for sha in "ab"]
+    paths = [tmp_path / label for label in "ab"]
+    for path in paths:
+        path.mkdir()
+    archives = [_repository_archive(path, "returning", label) for path, label in zip(paths, "ab")]
+
+    async def receipt():
+        return {
+            r.source_key: (r.data_id, r.content_hash, r.status)
+            for r in await source_records(binding, repo)
+        }
+
+    try:
+        first = await index_repository_archive(requests[0], archives[0])
+        sources_a = await receipt()
+        assert sources_a
+        await index_repository_archive(requests[1], archives[1])
+        sources_b = await receipt()
+        assert sources_a != sources_b
+        restored = await index_repository_archive(requests[0], archives[0])
+        assert await receipt() == sources_a
+        snapshot = (await customer_snapshots(binding.organization_id))[0]
+        assert snapshot.requested_sha == requests[0].requested_sha
+        assert snapshot.indexed_sha == requests[0].requested_sha
+        assert snapshot.status == "indexed"
+        assert restored.id == first.id
+        assert restored.attempt_count == first.attempt_count + 1
+        duplicate = await index_repository_archive(requests[0], archives[0])
+        assert duplicate.attempt_count == restored.attempt_count
+        assert duplicate.status == "succeeded"
+        assert await receipt() == sources_a
+    finally:
+        await delete_organization(binding.organization_id, 1)

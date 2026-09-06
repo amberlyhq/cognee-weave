@@ -252,3 +252,17 @@ those running-service values are read back.
 `.github/workflows/upstream-sync.yml` checks upstream weekly and opens an
 exact-SHA proposal PR. It never merges. Review conflicts, run `weave-gate`, and
 manually accept only after the tenant and Postgres boundaries remain green.
+
+## Returning to an earlier default-branch commit
+
+A historical successful index job is not proof that its sources are still current.
+When a repository moves A → B → A, the index ledger requeues A and restores its
+native sources before promoting the snapshot. Superseded historical jobs can also
+be retried. Duplicate delivery of the currently indexed commit remains a no-op.
+
+Release regression verification (2026-09-06): four state-machine cases failed before
+the fix and passed afterward. The PostgreSQL archive regression failed on the old
+code because B's content receipt remained, then passed with A's original source IDs
+and content hashes restored. The maintained PostgreSQL suite passed 15 tests; the
+focused Weave unit suite passed 199 tests, and Ruff correctness checks passed.
+These local checks do not establish hosted CI or staging deployment acceptance.
