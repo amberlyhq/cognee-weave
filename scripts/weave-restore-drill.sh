@@ -88,6 +88,12 @@ for _ in $(seq 1 90); do
 done
 curl -fsS "$base_url/health" >/dev/null
 
+# Only parity backups contain this synthetic vector; never require it in customer backups.
+if [ "${RESTORE_EXPECT_VECTOR_CANARY:-false}" = "true" ]; then
+  docker compose -p "$restore_project" -f "$compose_file" exec -T weave \
+    python - "$RESTORE_ORGANIZATION_ID" --read-only < "$root/scripts/weave-vector-canary.py"
+fi
+
 export_response="$(curl -fsS \
   -H "Authorization: Bearer ${WEAVE_INTERNAL_TOKEN}" \
   "$base_url/api/v1/weave/organizations/${RESTORE_ORGANIZATION_ID}/export?repository_id=${RESTORE_REPOSITORY_ID}")"

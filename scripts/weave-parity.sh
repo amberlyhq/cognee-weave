@@ -228,6 +228,11 @@ assert len(native) == 1 and native[0]["scope"] == "customer"
 assert native[0]["dataset_id"] and native[0]["nodes"] and native[0]["edges"]
 '
 
+# Native graph-only fixtures need not create vector collections. Exercise the
+# configured runtime adapter explicitly; do not infer vector health from graph health.
+docker compose -p "$project" -f "$compose_file" exec -T weave \
+  python - "$organization_b" < "$root/scripts/weave-vector-canary.py"
+
 database_bytes="$(docker compose -p "$project" -f "$compose_file" exec -T postgres \
   psql -At --username=cognee --dbname=cognee_db -c "SELECT pg_database_size('cognee_db')")"
 database_growth_bytes="$(( database_bytes - database_before_bytes ))"
@@ -245,7 +250,7 @@ fi
 backup="$temporary/weave.dump"
 "$root/scripts/weave-backup.sh" "$backup" >/dev/null
 RESTORE_ORGANIZATION_ID="$organization_b" RESTORE_REPOSITORY_ID="$repository_b" \
-  RESTORE_EXPECTED_EXPORT="$temporary/expected-export.json" \
+  RESTORE_EXPECTED_EXPORT="$temporary/expected-export.json" RESTORE_EXPECT_VECTOR_CANARY=true \
   RESTORE_HTTP_PORT=18001 RESTORE_POSTGRES_PORT=15433 \
   "$root/scripts/weave-restore-drill.sh" "$backup" >/dev/null
 

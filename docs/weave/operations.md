@@ -277,3 +277,10 @@ and checks the customer dataset and graph in `native_graph`. It compares the com
 restored export after normalizing ordering and the nested graph JSON. Regression
 cases reject foreign organizations/repositories, stale SHAs, missing graphs, changed
 dataset IDs, and changed content. Equivalent JSON formatting is accepted.
+
+Parity explicitly writes and searches a 1536-dimensional vector through the runtime
+role in its disposable customer dataset, then checks that dataset's HNSW index.
+Graph-only native fixtures are not evidence of vector storage. The parity restore
+leg enables `RESTORE_EXPECT_VECTOR_CANARY=true` and reads the restored vector without
+inserting or repairing it. Ordinary customer restore drills do not require this
+synthetic canary. The standalone schema-local query-plan test remains required.
