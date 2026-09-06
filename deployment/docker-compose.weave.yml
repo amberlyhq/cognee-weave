@@ -93,7 +93,7 @@ services:
       WEAVE_EMBEDDING_ENDPOINT: https://openrouter.ai/api/v1
       WEAVE_EMBEDDING_API_KEY: ${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}
       MOCK_EMBEDDING: ${WEAVE_MOCK_EMBEDDING:-false}
-      ENOLA_PATH: /app/.cognee/bin/enola-0.3.13-linux-arm64
+      ENOLA_PATH: /app/.cognee/bin/enola
       ENOLA_AUTO_INSTALL: "false"
       COGNEE_SKIP_CONNECTION_TEST: "true"
     depends_on:

@@ -125,11 +125,11 @@ RUN python -c "from cognee_db_workers._kuzu_helpers import install_json_extensio
 # Weave indexing must not download required tools or models on the first
 # customer request. Keep each asset in its own build layer so a slow provider
 # cannot throw away downloads that already finished.
-RUN python -c "from cognee.tasks.code_graph.install_enola import install_enola; install_enola()"
+RUN python -c "from pathlib import Path; from cognee.tasks.code_graph.install_enola import install_enola; binary = Path(install_enola()); (binary.parent / 'enola').symlink_to(binary.name)"
 RUN python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
 
 ENV ENOLA_AUTO_INSTALL=false
-ENV ENOLA_PATH=/app/.cognee/bin/enola-0.3.13-linux-arm64
+ENV ENOLA_PATH=/app/.cognee/bin/enola
 
 ENTRYPOINT ["/app/entrypoint.sh"]
 

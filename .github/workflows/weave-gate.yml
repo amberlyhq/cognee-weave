@@ -36,6 +36,8 @@ jobs:
           cognee/tests/unit/infrastructure/databases/graph/test_postgres_adapter.py
           cognee/tests/unit/infrastructure/databases/vector
           cognee/tests/unit/modules/weave
+          cognee/tests/unit/modules/migrations
+          cognee/tests/unit/test_run_migrations.py
           cognee/tests/unit/api/v1/weave/test_internal_auth.py
           --timeout=300 --timeout-method=thread
       - name: Build wheel and source distribution
@@ -92,6 +94,10 @@ jobs:
           enable-cache: true
       - name: Install locked Postgres dependencies
         run: uv sync --locked --dev --extra postgres
+      - name: Bootstrap the fresh Weave database
+        env:
+          ENABLE_AUTO_MIGRATIONS: "true"
+        run: uv run cognee-cli upgrade head
       - name: Postgres tenant, index, recall, and deletion gates
         run: >-
           uv run pytest

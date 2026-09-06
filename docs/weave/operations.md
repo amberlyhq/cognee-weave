@@ -266,3 +266,8 @@ code because B's content receipt remained, then passed with A's original source 
 and content hashes restored. The maintained PostgreSQL suite passed 15 tests; the
 focused Weave unit suite passed 199 tests, and Ruff correctness checks passed.
 These local checks do not establish hosted CI or staging deployment acceptance.
+
+The container exposes its build-platform parser through `/app/.cognee/bin/enola`;
+it must not force the ARM64 filename on AMD64 builders. The CI PostgreSQL job
+bootstraps its fresh database with `cognee-cli upgrade head` before storage tests,
+and the Python gate also runs migration/bootstrap regressions.

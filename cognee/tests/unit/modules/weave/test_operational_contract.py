@@ -252,11 +252,13 @@ def test_operations_and_parity_docs_keep_neo4j_out_of_the_runtime():
     assert "WEAVE_EMBEDDING_API_KEY: ${OPENROUTER_API_KEY" in compose
     dockerfile = (ROOT / "Dockerfile").read_text()
     assert "install_enola()" in dockerfile
+    assert "linux-arm64" not in dockerfile
+    assert "linux-arm64" not in compose
     assert "BAAI/bge-small-en-v1.5" not in dockerfile
     assert "weave image warmup" not in dockerfile
     assert "ENOLA_AUTO_INSTALL=false" in dockerfile
-    assert "ENOLA_PATH=/app/.cognee/bin/enola-0.3.13-linux-arm64" in dockerfile
-    assert "ENOLA_PATH: /app/.cognee/bin/enola-0.3.13-linux-arm64" in compose
+    assert "ENOLA_PATH=/app/.cognee/bin/enola" in dockerfile
+    assert "ENOLA_PATH: /app/.cognee/bin/enola" in compose
     for prefix in ("VECTOR_DB", "GRAPH_DATABASE"):
         for suffix in ("HOST", "PORT", "USERNAME", "PASSWORD", "NAME"):
             assert f"{prefix}_{suffix}:" in compose
