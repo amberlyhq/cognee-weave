@@ -96,17 +96,20 @@ import json, os, pathlib, sys
 value = json.load(sys.stdin)
 assert value["organization_id"] == os.environ["RESTORE_ORGANIZATION_ID"]
 repository_id = int(os.environ["RESTORE_REPOSITORY_ID"])
-repositories = [item for item in value["repositories"] if item["github_repository_id"] == repository_id]
-assert repositories and repositories[0]["indexed_default_sha"]
+repositories = value["repositories"]
+assert len(repositories) == 1 and repositories[0]["github_repository_id"] == repository_id
+assert repositories[0]["indexed_default_sha"]
 native = json.loads(value["native_graph"])
-assert native and native[0]["nodes"] and native[0]["edges"]
-assert all(item["github_repository_id"] == repository_id for item in native)
-assert all(item["indexed_sha"] for item in native)
+assert len(native) == 1 and native[0]["scope"] == "customer"
+assert native[0]["dataset_id"] and native[0]["nodes"] and native[0]["edges"]
 
 expected = json.loads(pathlib.Path(os.environ["RESTORE_EXPECTED_EXPORT"]).read_text())
 def normalized(item):
     if isinstance(item, dict):
-        return {key: normalized(child) for key, child in item.items() if key != "age_seconds"}
+        return {
+            key: normalized(json.loads(child) if key == "native_graph" and child else child)
+            for key, child in item.items() if key != "age_seconds"
+        }
     if isinstance(item, list):
         children = [normalized(child) for child in item]
         return sorted(children, key=lambda child: json.dumps(child, sort_keys=True))

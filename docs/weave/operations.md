@@ -271,3 +271,9 @@ The container exposes its build-platform parser through `/app/.cognee/bin/enola`
 it must not force the ARM64 filename on AMD64 builders. The CI PostgreSQL job
 bootstraps its fresh database with `cognee-cli upgrade head` before storage tests,
 and the Python gate also runs migration/bootstrap regressions.
+
+The native export/restore gate checks repository identity and SHA in `repositories`,
+and checks the customer dataset and graph in `native_graph`. It compares the complete
+restored export after normalizing ordering and the nested graph JSON. Regression
+cases reject foreign organizations/repositories, stale SHAs, missing graphs, changed
+dataset IDs, and changed content. Equivalent JSON formatting is accepted.

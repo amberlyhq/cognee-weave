@@ -220,10 +220,12 @@ import json, os, sys
 value = json.load(sys.stdin)
 assert value["organization_id"] == os.environ["ORGANIZATION_ID"]
 repository_id = int(os.environ["REPOSITORY_ID"])
+repositories = value["repositories"]
+assert len(repositories) == 1 and repositories[0]["github_repository_id"] == repository_id
+assert repositories[0]["indexed_default_sha"] == os.environ["SHA"]
 native = json.loads(value["native_graph"])
-assert native and native[0]["nodes"]
-assert all(item["github_repository_id"] == repository_id for item in native)
-assert all(item["indexed_sha"] == os.environ["SHA"] for item in native)
+assert len(native) == 1 and native[0]["scope"] == "customer"
+assert native[0]["dataset_id"] and native[0]["nodes"] and native[0]["edges"]
 '
 
 database_bytes="$(docker compose -p "$project" -f "$compose_file" exec -T postgres \
