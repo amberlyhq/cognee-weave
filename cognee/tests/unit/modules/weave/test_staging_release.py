@@ -243,3 +243,26 @@ def test_failure_evidence_keeps_attempted_deployment_id():
     with pytest.raises(RuntimeError):
         release.release(client, SHA, evidence)
     assert evidence["deployments"] == [{"service": "migrate", "id": "migrate"}]
+
+
+def test_api_uses_explicit_user_agent_for_railway_edge(monkeypatch):
+    import io
+    from urllib.error import HTTPError
+
+    client = release.Railway(
+        {
+            "RAILWAY_PROJECT_TOKEN": "test-placeholder",
+            "RAILWAY_ENVIRONMENT_ID": "staging-id",
+            "RAILWAY_MIGRATE_SERVICE_ID": "migrate-id",
+            "RAILWAY_WEAVE_SERVICE_ID": "api-id",
+        }
+    )
+
+    def edge(request, **kwargs):
+        # Railway's edge returns HTTP403/1010 for urllib's default user agent.
+        if not request.get_header("User-agent"):
+            raise HTTPError(request.full_url, 403, "Forbidden", {}, None)
+        return io.BytesIO(b'{"data":{"ok":true}}')
+
+    monkeypatch.setattr(release, "urlopen", edge)
+    assert client.api("query { ok }", {}) == {"ok": True}
