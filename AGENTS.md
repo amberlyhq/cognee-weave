@@ -151,7 +151,7 @@ MCP server and Frontend:
 
 ## Commit & Pull Request Guidelines
 
-- Use clear, imperative subjects (≤ 72 chars) and conventional commit styling in PR titles. Our CI validates semantic PR titles (see `.github/workflows/pr_lint`). Examples:
+- Use clear, imperative subjects (≤ 72 chars) and conventional commit styling in PR titles. Use these conventions in review. Examples:
   - `feat(graph): add temporal edge weighting`
   - `fix(api): handle missing auth cookie`
   - `docs: update installation instructions`
@@ -161,4 +161,4 @@ MCP server and Frontend:
 
 ## CI Mirrors Local Commands
 
-Our GitHub Actions run the same ruff checks and pytest suites shown above (`.github/workflows/basic_tests.yml` and related workflows). Use the commands in this document locally to minimize CI surprises.
+The maintained fork contract is `.github/workflows/weave-gate.yml`: use its locked dependency installation, correctness lint, offline core/CLI/telemetry suites, Weave unit tests, Postgres isolation tests, and image/restore checks. The general commands above are upstream development examples, not the fork release gate. See `UPSTREAM.md` for CI ownership and the exact-commit staging release policy.
