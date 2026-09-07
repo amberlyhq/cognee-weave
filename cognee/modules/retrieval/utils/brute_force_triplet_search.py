@@ -6,6 +6,7 @@ from cognee.modules.observability import OtelStatusCode as StatusCode
 
 from cognee.base_config import get_base_config
 from cognee.infrastructure.databases.graph import get_graph_engine
+from cognee.context_global_variables import strict_database_scope
 from cognee.infrastructure.databases.vector.exceptions import CollectionNotFoundError
 from cognee.modules.graph.cognee_graph.CogneeGraph import CogneeGraph
 from cognee.modules.graph.cognee_graph.CogneeGraphElements import Edge
@@ -61,6 +62,11 @@ async def get_memory_fragment(
     neighborhood_seed_top_k: Optional[int] = 10,
 ) -> CogneeGraph:
     """Creates and initializes a CogneeGraph memory fragment with optional property projections."""
+    if graph_engine is None and strict_database_scope.get():
+        raise RuntimeError(
+            "Strict dataset retrieval requires an already resolved tenant graph engine."
+        )
+
     if properties_to_project is None:
         properties_to_project = ["id", "description", "name", "type", "text", "importance_weight"]
 

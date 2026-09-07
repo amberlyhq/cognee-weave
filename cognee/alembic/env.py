@@ -7,9 +7,12 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from cognee.infrastructure.databases.relational import get_relational_engine, Base
+import cognee.modules.integrations.models  # noqa: F401
+import cognee.modules.sync.models  # noqa: F401
 import cognee.modules.session_lifecycle.models  # noqa: F401
 import cognee.modules.migrations.models  # noqa: F401
 import cognee.modules.provenance.models  # noqa: F401
+import cognee.modules.weave.models  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -96,8 +99,9 @@ db_engine = get_relational_engine()
 # names the s3:// path, which aiosqlite cannot open). The live engine's URL
 # always points at the real connection target on every backend.
 db_uri = db_engine.engine.url.render_as_string(hide_password=False)
+safe_db_uri = db_engine.engine.url.render_as_string(hide_password=True)
 
-logging.getLogger("alembic.env").info("Using database: %s", db_uri)
+logging.getLogger("alembic.env").info("Using database: %s", safe_db_uri)
 
 config.set_section_option(
     config.config_ini_section,

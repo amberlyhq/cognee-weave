@@ -11,6 +11,7 @@ from cognee.modules.graph.models.EdgeType import EdgeType
 from cognee.modules.graph.cognee_graph.CogneeGraph import CogneeGraph
 from cognee.modules.graph.exceptions.exceptions import EntityNotFoundError
 from cognee.infrastructure.databases.vector.exceptions.exceptions import CollectionNotFoundError
+from cognee.context_global_variables import strict_database_scope
 
 
 class MockScoredResult:
@@ -607,6 +608,20 @@ async def test_get_memory_fragment_returns_empty_graph_on_error():
 
         assert isinstance(fragment, CogneeGraph)
         assert len(fragment.nodes) == 0
+
+
+@pytest.mark.asyncio
+async def test_get_memory_fragment_fails_closed_without_engine_in_strict_scope():
+    token = strict_database_scope.set(True)
+    try:
+        with patch(
+            "cognee.modules.retrieval.utils.brute_force_triplet_search.get_graph_engine"
+        ) as global_graph:
+            with pytest.raises(RuntimeError, match="resolved tenant graph engine"):
+                await get_memory_fragment()
+        global_graph.assert_not_called()
+    finally:
+        strict_database_scope.reset(token)
 
 
 @pytest.mark.asyncio

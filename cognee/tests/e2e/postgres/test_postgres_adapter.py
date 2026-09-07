@@ -18,7 +18,6 @@ import pytest_asyncio
 from cognee.infrastructure.databases.graph.postgres_demo.adapter import PostgresDemoAdapter
 from cognee.infrastructure.databases.provenance import EdgeIdentity, make_source_ref_key
 
-
 # -- Session-scoped event loop so the async engine's connection pool
 #    stays on a single loop across all tests.
 
@@ -689,6 +688,22 @@ async def test_get_filtered_graph_data(adapter):
     node_ids = {n[0] for n in nodes}
     assert node_ids == {"fg1", "fg3"}
     assert len(edges) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_filtered_graph_data_applies_database_side_bounds(adapter):
+    await adapter.add_nodes(
+        [_FakeDataPoint(id=f"bounded-{index}", name=str(index), type="Bounded") for index in range(6)]
+    )
+    for index in range(5):
+        await adapter.add_edge(f"bounded-{index}", f"bounded-{index + 1}", "R")
+
+    nodes, edges = await adapter.get_filtered_graph_data(
+        [{"type": ["Bounded"]}], max_nodes=3, max_edges=1
+    )
+
+    assert len(nodes) == 3
+    assert len(edges) <= 1
 
 
 # -- Tests: metrics --

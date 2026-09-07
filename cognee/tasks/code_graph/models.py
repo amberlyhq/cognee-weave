@@ -1,8 +1,32 @@
+from datetime import datetime
 from typing import Any, Optional
+from uuid import UUID
 
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from cognee.infrastructure.engine.models.DataPoint import DataPoint
+
+
+class RepositoryProvenance(BaseModel):
+    """Stable source identity supplied by the trusted ingestion boundary."""
+
+    model_config = ConfigDict(frozen=True)
+
+    organization_id: UUID
+    github_repository_id: int
+    repository_owner: str
+    repository_name: str
+    indexed_sha: str
+    pipeline_version: str
+    extraction_version: str
+
+    @property
+    def repository_identity(self) -> str:
+        return f"github:{self.organization_id}:{self.github_repository_id}"
+
+    @property
+    def source_ref(self) -> str:
+        return f"github://{self.repository_owner}/{self.repository_name}@{self.indexed_sha}"
 
 
 class CodeRepository(DataPoint):
@@ -18,6 +42,15 @@ class CodeRepository(DataPoint):
     path: str
     last_snapshot_id: Optional[str] = None
     last_delta: Optional[dict] = None
+    organization_id: Optional[UUID] = None
+    github_repository_id: Optional[int] = None
+    repository_owner: Optional[str] = None
+    repository_name: Optional[str] = None
+    indexed_sha: Optional[str] = None
+    source_path: Optional[str] = None
+    pipeline_version: Optional[str] = None
+    extraction_version: Optional[str] = None
+    deleted_at: Optional[datetime] = None
     metadata: dict = {"index_fields": ["name"]}
 
 
@@ -36,6 +69,16 @@ class CodeGraphEntity(DataPoint):
     description: Optional[str] = None
     fact_properties: dict[str, Any] = Field(default_factory=dict)
     fact_hash: Optional[str] = None
+    fact_identity: Optional[str] = None
+    organization_id: Optional[UUID] = None
+    github_repository_id: Optional[int] = None
+    repository_owner: Optional[str] = None
+    repository_name: Optional[str] = None
+    indexed_sha: Optional[str] = None
+    source_path: Optional[str] = None
+    pipeline_version: Optional[str] = None
+    extraction_version: Optional[str] = None
+    deleted_at: Optional[datetime] = None
     part_of: Optional[CodeRepository] = None
     metadata: dict = {"index_fields": ["name"]}
 

@@ -1,8 +1,9 @@
 import os
 import asyncio
+import importlib
 import pytest
-from unittest.mock import patch
-from cognee.api.v1.health.health import HealthChecker, HealthStatus
+from unittest.mock import AsyncMock, patch
+from cognee.api.v1.health.health import ComponentHealth, HealthChecker, HealthStatus
 from cognee.base_config import get_base_config
 
 
@@ -36,3 +37,38 @@ async def test_health_check_does_not_delete_existing_file():
 
     # Clean up
     os.remove(existing_file)
+
+
+@pytest.mark.asyncio
+async def test_strict_weave_health_does_not_open_unscoped_graph_or_vector_engines(monkeypatch):
+    monkeypatch.setenv("WEAVE_STRICT_MODE", "true")
+    checker = HealthChecker()
+    checker.check_relational_db = AsyncMock(
+        return_value=ComponentHealth(
+            status=HealthStatus.HEALTHY,
+            provider="postgres",
+            response_time_ms=1,
+            details="Connection successful",
+        )
+    )
+
+    async def forbidden_global_engine():
+        raise AssertionError("strict Weave health must not open a global database engine")
+
+    graph_module = importlib.import_module(
+        "cognee.infrastructure.databases.graph.get_graph_engine"
+    )
+    vector_module = importlib.import_module(
+        "cognee.infrastructure.databases.vector.get_vector_engine"
+    )
+    monkeypatch.setattr(graph_module, "get_graph_engine", forbidden_global_engine)
+    monkeypatch.setattr(vector_module, "get_vector_engine_async", forbidden_global_engine)
+
+    graph = await checker.check_graph_db()
+    vector = await checker.check_vector_db()
+
+    assert graph.status == HealthStatus.HEALTHY
+    assert graph.provider == "postgres_demo"
+    assert vector.status == HealthStatus.HEALTHY
+    assert vector.provider == "pgvector"
+    assert checker.check_relational_db.await_count == 2

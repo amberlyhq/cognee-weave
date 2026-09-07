@@ -69,3 +69,20 @@
 /CONTRIBUTING.md                                   @Vasilije1990
 /AGENTS.md                                         @Vasilije1990
 /CLAUDE.md                                         @Vasilije1990
+
+# -----------------------------------------------------------------------------
+# Cognee Weave fork boundary and tenant-sensitive code
+# -----------------------------------------------------------------------------
+/UPSTREAM.md                                       @XSIRIX
+/.github/workflows/weave-gate.yml                  @XSIRIX
+/.github/workflows/upstream-sync.yml               @XSIRIX
+/deployment/docker-compose.weave.yml               @XSIRIX
+/scripts/weave-parity.sh                           @XSIRIX
+/scripts/weave-backup.sh                           @XSIRIX
+/scripts/weave-restore-drill.sh                    @XSIRIX
+/docs/weave/                                       @XSIRIX
+/cognee/context_global_variables.py                @XSIRIX
+/cognee/infrastructure/databases/graph/postgres_demo/ @XSIRIX
+/cognee/infrastructure/databases/vector/pgvector/  @XSIRIX
+/cognee/modules/weave/                             @XSIRIX
+/cognee/api/v1/weave/                              @XSIRIX

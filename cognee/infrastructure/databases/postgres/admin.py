@@ -54,7 +54,7 @@ def _compile_drop_database_if_exists(element: DropDatabaseIfExists, compiler, **
     return "DROP DATABASE IF EXISTS " + compiler.preparer.quote(element.db_name)
 
 
-def dataset_schema_name(dataset_id: Union[UUID, str]) -> str:
+def dataset_schema_name(dataset_id: UUID) -> str:
     """Postgres schema name used to isolate a dataset in shared-database mode.
 
     Returns ``ds_<dataset_id_hex>`` — a valid, lower-case Postgres identifier
@@ -63,8 +63,10 @@ def dataset_schema_name(dataset_id: Union[UUID, str]) -> str:
     starts with a digit, and namespaces these schemas so they never collide
     with ``public`` or cognee's relational tables.
     """
-    raw = dataset_id.hex if isinstance(dataset_id, UUID) else str(dataset_id).replace("-", "")
-    return f"ds_{raw}"
+    if not isinstance(dataset_id, UUID):
+        raise ValueError("dataset_schema_name requires a dataset UUID")
+
+    return f"ds_{dataset_id.hex}"
 
 
 def _admin_connect_args() -> dict:
@@ -149,6 +151,14 @@ async def create_pg_schema_if_not_exists(
     )
     try:
         async with engine.begin() as connection:
+            if os.getenv("WEAVE_STRICT_MODE") == "true":
+                await connection.execute(
+                    text(
+                        "SELECT public.weave_create_dataset_schema(:schema_name, :include_vector)"
+                    ),
+                    {"schema_name": schema, "include_vector": with_vector_extension},
+                )
+                return
             if with_vector_extension:
                 await connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
             await connection.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema}";'))
@@ -170,12 +180,31 @@ async def drop_pg_schema_if_exists(
     giving the shared-database handlers an atomic, single-statement cleanup that
     mirrors ``drop_pg_database_if_exists`` for the database-per-dataset mode.
     """
+    organization_id = None
+    if os.getenv("WEAVE_STRICT_MODE") == "true":
+        from cognee.modules.weave.scope import native_organization
+
+        organization_id = native_organization.get()
+        if organization_id is None:
+            raise ValueError("Native dataset deletion requires organization scope")
+        if not re.fullmatch(r"ds_[0-9a-f]{32}", schema):
+            raise ValueError("Invalid native dataset schema")
     engine = create_async_engine(
         _build_db_url(db_name, host, port, username, password),
         connect_args=_admin_connect_args(),
     )
     try:
         async with engine.begin() as connection:
+            if organization_id is not None:
+                await connection.execute(
+                    text("SELECT set_config('app.weave_organization_id', :org, true)"),
+                    {"org": str(organization_id)},
+                )
+                await connection.execute(
+                    text("SELECT public.weave_drop_native_dataset_schema(:org, :dataset)"),
+                    {"org": organization_id, "dataset": UUID(schema[3:])},
+                )
+                return
             await connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE;'))
     finally:
         await engine.dispose()

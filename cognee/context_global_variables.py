@@ -28,6 +28,7 @@ from cognee.infrastructure.databases.utils.resolve_dataset_database_connection_i
 vector_db_config = ContextVar("vector_db_config", default=None)
 graph_db_config = ContextVar("graph_db_config", default=None)
 current_dataset_id: ContextVar[Optional[UUID]] = ContextVar("current_dataset_id", default=None)
+strict_database_scope: ContextVar[bool] = ContextVar("strict_database_scope", default=False)
 # Note: same mechanism for LLM and embedding configs so that the LiteLLM client
 #       and the embedding engine can use per-context (e.g. per-request) configs.
 llm_config: ContextVar[Optional[LLMConfig]] = ContextVar("llm_config", default=None)
@@ -123,10 +124,16 @@ class DatabaseContextManager:
         "_user_id",
         "_llm_config",
         "_embedding_config",
+        "_restore_database_configs",
         "_applied",
         "_dataset_token",
         "_llm_token",
         "_embedding_token",
+        "_graph_token",
+        "_vector_token",
+        "_storage_token",
+        "_strict_scope_token",
+        "_slot_acquired",
     )
 
     def __init__(
@@ -135,15 +142,22 @@ class DatabaseContextManager:
         user_id: UUID,
         llm_config: Optional[LLMConfig] = None,
         embedding_config: Optional[EmbeddingConfig] = None,
+        restore_database_configs: bool = False,
     ) -> None:
         self._dataset = dataset
         self._user_id = user_id
         self._llm_config = llm_config
         self._embedding_config = embedding_config
+        self._restore_database_configs = restore_database_configs
         self._applied = False
         self._dataset_token = None
         self._llm_token = None
         self._embedding_token = None
+        self._graph_token = None
+        self._vector_token = None
+        self._storage_token = None
+        self._strict_scope_token = None
+        self._slot_acquired = False
 
     async def apply_database_context_variables(
         self, dataset: Optional[UUID], user_id: UUID
@@ -183,6 +197,7 @@ class DatabaseContextManager:
         from cognee.infrastructure.databases.dataset_queue import dataset_queue
 
         await dataset_queue().ensure_slot(dataset)
+        self._slot_acquired = True
 
         user = await get_user(user_id)
 
@@ -270,15 +285,58 @@ class DatabaseContextManager:
         # overrides these intentionally persist after async-with exit: callers
         # read the per-dataset databases right after a pipeline run, outside
         # this context manager.
-        graph_db_config.set(graph_config)
-        vector_db_config.set(vector_config)
-        file_storage_config.set(storage_config)
+        graph_token = graph_db_config.set(graph_config)
+        vector_token = vector_db_config.set(vector_config)
+        storage_token = file_storage_config.set(storage_config)
+        if self._restore_database_configs:
+            self._graph_token = graph_token
+            self._vector_token = vector_token
+            self._storage_token = storage_token
 
     async def _apply(self) -> None:
         if self._applied:
             return
-        await self.apply_database_context_variables(self._dataset, self._user_id)
-        self._applied = True
+        try:
+            if self._restore_database_configs:
+                self._strict_scope_token = strict_database_scope.set(True)
+            await self.apply_database_context_variables(self._dataset, self._user_id)
+            self._applied = True
+        except BaseException:
+            self._restore_context_variables()
+            await self._release_slot()
+            raise
+
+    def _restore_context_variables(self) -> None:
+        """Reset every token this single-use manager installed."""
+        if self._restore_database_configs:
+            for context_var, token_attr in (
+                (file_storage_config, "_storage_token"),
+                (vector_db_config, "_vector_token"),
+                (graph_db_config, "_graph_token"),
+            ):
+                token = getattr(self, token_attr)
+                if token is not None:
+                    context_var.reset(token)
+                    setattr(self, token_attr, None)
+
+        for context_var, token_attr in (
+            (embedding_config, "_embedding_token"),
+            (llm_config, "_llm_token"),
+            (current_dataset_id, "_dataset_token"),
+            (strict_database_scope, "_strict_scope_token"),
+        ):
+            token = getattr(self, token_attr)
+            if token is not None:
+                context_var.reset(token)
+                setattr(self, token_attr, None)
+
+    async def _release_slot(self) -> None:
+        if not self._slot_acquired:
+            return
+        from cognee.infrastructure.databases.dataset_queue import dataset_queue
+
+        await dataset_queue().release_slot_for(self._dataset)
+        self._slot_acquired = False
 
     def __await__(self):
         # Legacy ``await set_database_global_context_variables(...)`` call shape.
@@ -299,26 +357,11 @@ class DatabaseContextManager:
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
-        # Restore the caller-provided LLM/embedding overrides and the dataset id
-        # so they don't leak into the surrounding async context. The dataset
-        # graph/vector/file-storage configs are left in place on purpose (see
-        # apply_database_context_variables).
-        for context_var, token_attr in (
-            (embedding_config, "_embedding_token"),
-            (llm_config, "_llm_token"),
-            (current_dataset_id, "_dataset_token"),
-        ):
-            token = getattr(self, token_attr)
-            if token is not None:
-                context_var.reset(token)
-                setattr(self, token_attr, None)
-
-        if not backend_access_control_enabled():
-            return None
-
-        from cognee.infrastructure.databases.dataset_queue import dataset_queue
-
-        await dataset_queue().release_slot_for(self._dataset)
+        # Strict callers also restore the dataset database and storage configs.
+        # The legacy helper intentionally keeps those values for compatibility
+        # with callers that inspect an engine immediately after a pipeline run.
+        self._restore_context_variables()
+        await self._release_slot()
 
 
 def set_database_global_context_variables(
@@ -369,3 +412,24 @@ def set_database_global_context_variables(
         async context manager.
     """
     return DatabaseContextManager(dataset, user_id, llm_config, embedding_config)
+
+
+def scoped_database_context_variables(
+    dataset: Optional[UUID],
+    user_id: UUID,
+    llm_config: Optional[LLMConfig] = None,
+    embedding_config: Optional[EmbeddingConfig] = None,
+) -> "DatabaseContextManager":
+    """Return a request-scoped dataset context that restores every config.
+
+    Use this boundary for services that may process different tenants on the
+    same worker task. Unlike :func:`set_database_global_context_variables`, it
+    never leaves graph, vector, or file-storage routing behind after exit.
+    """
+    return DatabaseContextManager(
+        dataset,
+        user_id,
+        llm_config,
+        embedding_config,
+        restore_database_configs=True,
+    )

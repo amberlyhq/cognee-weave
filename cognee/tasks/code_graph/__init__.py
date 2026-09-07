@@ -38,4 +38,5 @@ from .models import (
     CodeFileReference,
     ExternalDependency,
     StorageResource,
+    RepositoryProvenance,
 )

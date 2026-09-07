@@ -26,9 +26,9 @@ and a FAILED run does not set the flag, so the next call retries.
 """
 
 import asyncio
+import importlib.resources as pkg_resources
 import logging
 import os
-import importlib.resources as pkg_resources
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -287,8 +287,8 @@ async def apply_all_migrations(
     gate or the once-per-process guard — those belong to ``run_migrations``;
     the CLI must migrate even when automatic migrations are disabled.
     """
-    from cognee.modules.migrations.runner import migration_lock, run_database_migrations
     from cognee.infrastructure.databases.relational import get_relational_engine
+    from cognee.modules.migrations.runner import migration_lock, run_database_migrations
 
     async with migration_lock():
         if await _relational_schema_exists():
@@ -299,7 +299,20 @@ async def apply_all_migrations(
             # rather than replaying history. A partial relational_target only makes
             # sense for an existing DB — a fresh one is head by construction.
             logger.info("Fresh database: creating schema and stamping at head.")
+            # Keep this in sync with alembic/env.py. create_all only sees models
+            # imported into Base.metadata, and the entrypoint runs before the API
+            # routers import sync, integration, and Weave control-plane models.
+            import cognee.modules.integrations.models  # noqa: F401
+            import cognee.modules.migrations.models  # noqa: F401
+            import cognee.modules.provenance.models  # noqa: F401
+            import cognee.modules.session_lifecycle.models  # noqa: F401
+            import cognee.modules.sync.models  # noqa: F401
+            import cognee.modules.weave.models  # noqa: F401
+
             await get_relational_engine().create_database()
+            from cognee.modules.weave.rls import ensure_weave_rls_policies
+
+            await ensure_weave_rls_policies()
             await run_relational_stamp("head", script_location)
 
         return await run_database_migrations(data_target)

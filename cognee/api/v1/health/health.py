@@ -1,6 +1,7 @@
 """Health check system for cognee API."""
 
 from io import BytesIO
+import os
 import time
 import asyncio
 from sqlalchemy import text
@@ -56,6 +57,19 @@ class HealthChecker:
                 async with engine.get_async_session() as session:
                     # This works for both SQLite and PostgreSQL
                     await session.execute(text("SELECT 1"))
+                    if os.getenv("WEAVE_STRICT_MODE", "false") == "true":
+                        ready = await session.scalar(
+                            text(
+                                "SELECT to_regclass('public.weave_organization_bindings') "
+                                "IS NOT NULL AND EXISTS ("
+                                "SELECT 1 FROM pg_extension WHERE extname = 'vector'"
+                                ")"
+                            )
+                        )
+                        if not ready:
+                            raise RuntimeError(
+                                "Weave control-plane tables or pgvector extension are missing"
+                            )
             finally:
                 await session.close()
 
@@ -80,6 +94,15 @@ class HealthChecker:
         """Check vector database health."""
         start_time = time.time()
         try:
+            if os.getenv("WEAVE_STRICT_MODE", "false") == "true":
+                relational = await self.check_relational_db()
+                return ComponentHealth(
+                    status=relational.status,
+                    provider="pgvector",
+                    response_time_ms=relational.response_time_ms,
+                    details="Tenant-scoped pgvector uses the healthy shared Postgres service",
+                )
+
             from cognee.infrastructure.databases.vector.get_vector_engine import (
                 get_vector_engine_async,
             )
@@ -116,6 +139,15 @@ class HealthChecker:
         """Check graph database health."""
         start_time = time.time()
         try:
+            if os.getenv("WEAVE_STRICT_MODE", "false") == "true":
+                relational = await self.check_relational_db()
+                return ComponentHealth(
+                    status=relational.status,
+                    provider="postgres_demo",
+                    response_time_ms=relational.response_time_ms,
+                    details="Tenant-scoped graph schemas use the healthy shared Postgres service",
+                )
+
             from cognee.infrastructure.databases.graph.get_graph_engine import get_graph_engine
             from cognee.infrastructure.databases.graph.config import get_graph_config
 

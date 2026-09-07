@@ -9,8 +9,11 @@ WORKDIR /app
 # source (measured on cognee-saas-pod: ~8s of a ~13s import, halving startup).
 ENV UV_COMPILE_BYTECODE=1
 
-# Copy from the cache instead of linking since it's a mounted volume
+# Copy dependencies into the venv so it remains self-contained.
 ENV UV_LINK_MODE=copy
+# Keep this Dockerfile portable across Railway services: its cache mounts
+# require literal service IDs. Docker layer caching still caches uv sync.
+ENV UV_NO_CACHE=1
 
 # Set build argument
 ARG DEBUG
@@ -39,8 +42,7 @@ RUN apt-get update && apt-get install -y \
 COPY README.md pyproject.toml uv.lock entrypoint.sh ./
 
 # Install the project's dependencies using the lockfile and settings
-RUN --mount=type=cache,target=/root/.cache/uv \
-    set -eu; \
+RUN set -eu; \
     set -f; \
     set --; \
     for extra in ${COGNEE_EXTRAS}; do \
@@ -56,8 +58,7 @@ COPY ./cognee_db_workers /app/cognee_db_workers
 # module name. Listed in [tool.hatch.build.targets.wheel] packages, and
 # imported at module load by alembic/versions/b9274c27a25a_kuzu_11_migration.py.
 COPY ./kuzu /app/kuzu
-RUN --mount=type=cache,target=/root/.cache/uv \
-    set -eu; \
+RUN set -eu; \
     set -f; \
     set --; \
     for extra in ${COGNEE_EXTRAS}; do \
@@ -121,6 +122,15 @@ USER cognee
 # download must not break the image build.
 RUN python -c "from cognee_db_workers._kuzu_helpers import install_json_extension_local; install_json_extension_local(buffer_pool_size=268435456)" \
     || echo "WARNING: JSON extension pre-install skipped (no network at build time); it will be installed on first run if the container has network access."
+
+# Weave indexing must not download required tools or models on the first
+# customer request. Keep each asset in its own build layer so a slow provider
+# cannot throw away downloads that already finished.
+RUN python -c "from pathlib import Path; from cognee.tasks.code_graph.install_enola import install_enola; binary = Path(install_enola()); (binary.parent / 'enola').symlink_to(binary.name)"
+RUN python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
+
+ENV ENOLA_AUTO_INSTALL=false
+ENV ENOLA_PATH=/app/.cognee/bin/enola
 
 ENTRYPOINT ["/app/entrypoint.sh"]
 

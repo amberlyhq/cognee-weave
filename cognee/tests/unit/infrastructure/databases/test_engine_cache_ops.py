@@ -8,7 +8,9 @@ decorated factory.
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+from cognee.infrastructure.databases.graph.get_graph_engine import _graph_engine_key_args
 from cognee.infrastructure.databases.utils.engine_cache_ops import EngineCacheOps
+from cognee.infrastructure.databases.vector.create_vector_engine import _vector_engine_key_args
 
 
 def make_ops(**kwargs):
@@ -55,6 +57,17 @@ def test_evict_for_database_rejects_empty_name():
         ops.evict_for_database("")
 
 
+def test_evict_matching_routes_scoped_criteria_and_rejects_empty_match():
+    ops, factory, _ = make_ops()
+    factory.cache_evict_matching.return_value = 2
+
+    assert ops.evict_matching(graph_database_schema="ds_tenant") == 2
+    factory.cache_evict_matching.assert_called_once_with(graph_database_schema="ds_tenant")
+
+    with pytest.raises(ValueError, match="at least one criterion"):
+        ops.evict_matching()
+
+
 @pytest.mark.asyncio
 async def test_aevict_for_database_awaits_in_flight_closes():
     ops, factory, _ = make_ops()
@@ -90,3 +103,29 @@ async def test_aevict_for_url_awaits_in_flight_closes():
     assert await ops.aevict_for_url("bolt://localhost:7799") == 2
     factory.cache_evict_matching.assert_called_once_with(db_url_field="bolt://localhost:7799")
     factory.cache_await_closed.assert_awaited_once_with(db_url_field="bolt://localhost:7799")
+
+
+def test_graph_engine_cache_key_includes_dataset_schema():
+    first = _graph_engine_key_args(
+        {"graph_database_provider": "postgres_demo", "graph_database_schema": "ds_first"}
+    )
+    second = _graph_engine_key_args(
+        {"graph_database_provider": "postgres_demo", "graph_database_schema": "ds_second"}
+    )
+
+    assert first != second
+    assert first[-1] == "ds_first"
+    assert second[-1] == "ds_second"
+
+
+def test_vector_engine_cache_key_includes_dataset_schema():
+    first = _vector_engine_key_args(
+        {"vector_db_provider": "pgvector", "vector_db_schema": "ds_first"}
+    )
+    second = _vector_engine_key_args(
+        {"vector_db_provider": "pgvector", "vector_db_schema": "ds_second"}
+    )
+
+    assert first != second
+    assert first[-1] == "ds_first"
+    assert second[-1] == "ds_second"

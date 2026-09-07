@@ -26,7 +26,7 @@ from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, Iterable, Mapping, Optional
 from uuid import UUID
 
-from cognee.context_global_variables import current_dataset_id
+from cognee.context_global_variables import current_dataset_id, strict_database_scope
 from cognee.exceptions import CogneeValidationError
 from cognee.infrastructure.databases.graph import get_graph_engine
 from cognee.infrastructure.databases.graph.config import get_graph_context_config
@@ -105,6 +105,7 @@ _GRAPH_IDENTITY_FIELDS = (
     "graph_database_key",
     "graph_file_path",
     "graph_dataset_database_handler",
+    "graph_database_schema",
 )
 _INTERNAL_EDGE_PROPERTIES = {
     "source_node_id",
@@ -783,6 +784,10 @@ class CodeRetriever(BaseRetriever):
         )
 
     async def _snapshot(self) -> _CodeGraphSnapshot:
+        if strict_database_scope.get() and current_dataset_id.get() is None:
+            raise CodeSearchValidationError(
+                "CODE retrieval requires an active dataset in strict database scope."
+            )
         key = _code_graph_snapshot_cache_key()
 
         async def load() -> _CodeGraphSnapshot:

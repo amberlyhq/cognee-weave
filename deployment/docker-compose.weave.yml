@@ -1,0 +1,113 @@
+name: cognee-weave-parity
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg17-bookworm
+    environment:
+      POSTGRES_USER: cognee_admin
+      POSTGRES_PASSWORD: ${WEAVE_ADMIN_DB_PASSWORD:?WEAVE_ADMIN_DB_PASSWORD is required}
+      POSTGRES_DB: cognee_db
+      WEAVE_DB_PASSWORD: ${WEAVE_DB_PASSWORD:?WEAVE_DB_PASSWORD is required}
+    ports:
+      - "127.0.0.1:${WEAVE_POSTGRES_PORT:-15432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cognee_admin -d cognee_db"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - weave-postgres:/var/lib/postgresql/data
+      - ./init-weave-postgres.sh:/docker-entrypoint-initdb.d/10-init-weave-postgres.sh:ro
+
+  migrate:
+    image: cognee-weave-parity:local
+    entrypoint: ["/app/.venv/bin/cognee-cli", "upgrade", "head"]
+    environment:
+      ENV: prod
+      ENABLE_AUTO_MIGRATIONS: "true"
+      DB_PROVIDER: postgres
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USERNAME: cognee_admin
+      DB_PASSWORD: ${WEAVE_ADMIN_DB_PASSWORD:?WEAVE_ADMIN_DB_PASSWORD is required}
+      DB_NAME: cognee_db
+      VECTOR_DB_PROVIDER: pgvector
+      VECTOR_DATASET_DATABASE_HANDLER: pgvector_shared
+      VECTOR_DB_HOST: postgres
+      VECTOR_DB_PORT: "5432"
+      VECTOR_DB_USERNAME: cognee_admin
+      VECTOR_DB_PASSWORD: ${WEAVE_ADMIN_DB_PASSWORD:?WEAVE_ADMIN_DB_PASSWORD is required}
+      VECTOR_DB_NAME: cognee_db
+      GRAPH_DATABASE_PROVIDER: postgres_demo
+      GRAPH_DATASET_DATABASE_HANDLER: postgres_graph_shared
+      GRAPH_DATABASE_HOST: postgres
+      GRAPH_DATABASE_PORT: "5432"
+      GRAPH_DATABASE_USERNAME: cognee_admin
+      GRAPH_DATABASE_PASSWORD: ${WEAVE_ADMIN_DB_PASSWORD:?WEAVE_ADMIN_DB_PASSWORD is required}
+      GRAPH_DATABASE_NAME: cognee_db
+      COGNEE_SKIP_CONNECTION_TEST: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  weave:
+    image: cognee-weave-parity:local
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    environment:
+      ENV: prod
+      HTTP_PORT: "8000"
+      WEAVE_STRICT_MODE: "true"
+      ENABLE_AUTO_MIGRATIONS: "false"
+      WEAVE_INTERNAL_TOKEN: ${WEAVE_INTERNAL_TOKEN:?WEAVE_INTERNAL_TOKEN is required}
+      ENABLE_BACKEND_ACCESS_CONTROL: "true"
+      DB_PROVIDER: postgres
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USERNAME: cognee
+      DB_PASSWORD: ${WEAVE_DB_PASSWORD:?WEAVE_DB_PASSWORD is required}
+      DB_NAME: cognee_db
+      VECTOR_DB_PROVIDER: pgvector
+      VECTOR_DATASET_DATABASE_HANDLER: pgvector_shared
+      VECTOR_DB_HOST: postgres
+      VECTOR_DB_PORT: "5432"
+      VECTOR_DB_USERNAME: cognee
+      VECTOR_DB_PASSWORD: ${WEAVE_DB_PASSWORD:?WEAVE_DB_PASSWORD is required}
+      VECTOR_DB_NAME: cognee_db
+      GRAPH_DATABASE_PROVIDER: postgres_demo
+      GRAPH_DATASET_DATABASE_HANDLER: postgres_graph_shared
+      GRAPH_DATABASE_HOST: postgres
+      GRAPH_DATABASE_PORT: "5432"
+      GRAPH_DATABASE_USERNAME: cognee
+      GRAPH_DATABASE_PASSWORD: ${WEAVE_DB_PASSWORD:?WEAVE_DB_PASSWORD is required}
+      GRAPH_DATABASE_NAME: cognee_db
+      WEAVE_EMBEDDING_PROVIDER: openrouter
+      LLM_PROVIDER: openai
+      LLM_MODEL: openrouter/openai/gpt-oss-120b
+      LLM_ENDPOINT: https://openrouter.ai/api/v1
+      LLM_API_KEY: ${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}
+      LLM_ARGS: '{"extra_body":{"provider":{"zdr":true}}}'
+      WEAVE_EMBEDDING_MODEL: openrouter/openai/text-embedding-3-small
+      WEAVE_EMBEDDING_DIMENSIONS: "1536"
+      WEAVE_EMBEDDING_ENDPOINT: https://openrouter.ai/api/v1
+      WEAVE_EMBEDDING_API_KEY: ${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}
+      MOCK_EMBEDDING: ${WEAVE_MOCK_EMBEDDING:-false}
+      ENOLA_PATH: /app/.cognee/bin/enola
+      ENOLA_AUTO_INSTALL: "false"
+      COGNEE_SKIP_CONNECTION_TEST: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${WEAVE_HTTP_PORT:-18000}:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 10s
+      retries: 60
+
+volumes:
+  weave-postgres:
