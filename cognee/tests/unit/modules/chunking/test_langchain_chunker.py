@@ -83,7 +83,7 @@ async def test_read_yields_valid_document_chunks():
     chunker = LangchainChunker(document, max_chunk_size=512, get_text=get_text)
 
     with patch(
-        "cognee.modules.chunking.LangchainChunker.get_vector_engine",
+        "cognee.modules.chunking.LangchainChunker.get_vector_engine_async",
         return_value=_mock_vector_engine(),
     ):
         chunks = [chunk async for chunk in chunker.read()]
@@ -110,7 +110,7 @@ async def test_read_raises_for_chunks_over_max_chunk_size():
     chunker = LangchainChunker(document, max_chunk_size=3, get_text=get_text, chunk_size=1000)
 
     with patch(
-        "cognee.modules.chunking.LangchainChunker.get_vector_engine",
+        "cognee.modules.chunking.LangchainChunker.get_vector_engine_async",
         return_value=_mock_vector_engine(),
     ):
         with pytest.raises(ValueError, match="larger than the maximum"):

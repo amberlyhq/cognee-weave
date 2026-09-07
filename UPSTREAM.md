@@ -39,3 +39,23 @@ Every synchronization pull request must:
 | Accepted on | Upstream SHA | Notes |
 | --- | --- | --- |
 | 2026-08-31 | `8b86f868fcab8d688b41f430e4cc7be1d8427e11` | Initial fork point |
+
+## Fork CI and release ownership
+
+The active workflows are owned by Amberly:
+
+- `weave-gate.yml`: locked Python dependencies, correctness lint, offline core/CLI/
+  telemetry tests, Weave unit tests, real Postgres tenant/index/recall/deletion tests,
+  migrations, package build, secret scan, Docker isolation, performance and restore checks.
+- `release-staging.yml`: a successful main-push gate releases that exact commit to
+  private Railway staging, migrations first. GitHub's staging environment holds the
+  staging-only token. Direct Railway repository auto-deploy links stay disabled.
+- `scorecard.yml`: supply-chain security analysis.
+- `upstream-sync.yml`: reviewed upstream update proposals, never automatic merges.
+
+Inherited Cognee publishing, private-runner, Linear/team automation, and unused
+provider/OS/example matrices are removed. They assumed Cognee-owned DockerHub,
+PyPI, cloud services and credentials. We do not publish to Cognee's registries or
+claim coverage for its full provider matrix. Their source tests remain available;
+the useful secret-free core, CLI and telemetry suites now block our release gate.
+Historical failed/cancelled runs remain as audit history; new commits use this contract.
