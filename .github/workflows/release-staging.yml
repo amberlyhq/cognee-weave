@@ -1,0 +1,49 @@
+name: Release Staging
+
+on:
+  workflow_run:
+    workflows: [Cognee Weave Gate]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-staging
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.repository.full_name == github.repository &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    environment: staging
+    timeout-minutes: 70
+    env:
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+      VERIFIED_WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
+      RAILWAY_PROJECT_TOKEN: ${{ secrets.RAILWAY_PROJECT_TOKEN }}
+      RAILWAY_ENVIRONMENT_ID: ${{ vars.RAILWAY_ENVIRONMENT_ID }}
+      RAILWAY_MIGRATE_SERVICE_ID: ${{ vars.RAILWAY_MIGRATE_SERVICE_ID }}
+      RAILWAY_WEAVE_SERVICE_ID: ${{ vars.RAILWAY_WEAVE_SERVICE_ID }}
+    steps:
+      - name: Check out the verified commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.RELEASE_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Deploy the exact connected-GitHub commit
+        run: python3 scripts/release/staging.py
+      - name: Retain content-free release evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: staging-release-${{ env.RELEASE_SHA }}
+          path: release-evidence.json
+          if-no-files-found: error
+          retention-days: 90

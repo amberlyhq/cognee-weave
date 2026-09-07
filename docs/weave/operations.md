@@ -284,3 +284,40 @@ Graph-only native fixtures are not evidence of vector storage. The parity restor
 leg enables `RESTORE_EXPECT_VECTOR_CANARY=true` and reads the restored vector without
 inserting or repairing it. Ordinary customer restore drills do not require this
 synthetic canary. The standalone schema-local query-plan test remains required.
+
+### Automatic staging releases
+
+`.github/workflows/release-staging.yml` follows the Amberly monorepo release
+pattern: only a successful **Cognee Weave Gate** run for a push to this
+repository's `main` can release. It checks out that run's immutable full SHA;
+PR gates and upstream/fork runs cannot release. Concurrent releases queue rather
+than cancel one another. Disable Railway's source-triggered automatic deployments
+for both Weave services so they cannot bypass this gate.
+
+Configure these values in this repository's GitHub **staging** environment:
+
+- Secret `RAILWAY_PROJECT_TOKEN`: a project token scoped only to staging.
+- Variable `RAILWAY_ENVIRONMENT_ID`: the staging environment ID.
+- Variable `RAILWAY_MIGRATE_SERVICE_ID`: the `weave-migrate` service ID.
+- Variable `RAILWAY_WEAVE_SERVICE_ID`: the private `weave` API service ID.
+
+Both services must retain a connected GitHub source for this repository. The
+runner deploys the verified SHA through `serviceInstanceDeployV2`; it does not
+deploy the moving branch tip. It verifies the token environment and the target's
+`staging` name/project before mutations. The migrator must report `SUCCESS`, the
+exact `meta.commitHash`, and `deploymentStopped=true` before API deployment starts.
+The API must report `SUCCESS`, the same commit, and remain running. Its configured
+Railway `/health` startup check remains mandatory. No public domain is required.
+
+If API deployment fails, the runner attempts to roll back to the prior successful
+API deployment and verifies its original commit again. It never rolls back database
+migrations; migrations must remain compatible with the previous API. A failed
+migration never starts an API deployment. If the existing API's latest deployment
+is already unhealthy, automatic release stops for operator inspection.
+
+Every attempt retains a content-free `release-evidence.json` artifact for 90 days,
+including prior/new deployment IDs, exact commits, status, and rollback outcome.
+Provider metadata plus startup health is not an authenticated connectivity test:
+verify the private Weave API from Amberly's staging network after initial wiring
+or credential changes. `/health` reports package version, not source commit.
+This workflow has no production target and never changes GitHub App suspension.
