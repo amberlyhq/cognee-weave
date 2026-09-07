@@ -77,7 +77,11 @@ class Railway:
         request = Request(
             ENDPOINT,
             data=json.dumps({"query": query, "variables": variables}).encode(),
-            headers={"Content-Type": "application/json", "Project-Access-Token": self.token},
+            headers={
+                "Content-Type": "application/json",
+                "Project-Access-Token": self.token,
+                "User-Agent": "cognee-weave-staging-release/1.0",
+            },
         )
         # Never include provider response bodies or credentials in release artifacts/errors.
         try:
