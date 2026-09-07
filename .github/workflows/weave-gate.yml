@@ -130,3 +130,108 @@ jobs:
           WEAVE_MOCK_EMBEDDING: "true"
           MOCK_EMBEDDING: "true"
         run: scripts/weave-parity.sh
+
+  unit-tests:
+    name: Unit Tests (Mocked, No Secrets)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      ENV: dev
+      RUNTIME__LOG_LEVEL: ERROR
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          python-version: "3.11"
+          enable-cache: true
+
+      - name: Install dependencies
+        # postgres is needed so the SQL cache adapter tests run instead of skipping.
+        run: uv sync --locked --dev --extra postgres
+
+      - name: Run mocked unit tests
+        run: |
+          uv run pytest \
+            cognee/tests/unit/processing/ \
+            cognee/tests/unit/entity_extraction/ \
+            cognee/tests/unit/modules/graph/ \
+            cognee/tests/unit/modules/chunking/ \
+            cognee/tests/unit/modules/data/ \
+            cognee/tests/unit/modules/retrieval/ \
+            --ignore=cognee/tests/unit/modules/retrieval/graph_completion_retriever_cot_test.py \
+            --ignore=cognee/tests/unit/modules/retrieval/temporal_retriever_test.py \
+            --ignore=cognee/tests/unit/modules/retrieval/triplet_retriever_test.py \
+            cognee/tests/unit/modules/search/ \
+            cognee/tests/unit/modules/pipelines/ \
+            cognee/tests/unit/modules/visualization/ \
+            cognee/tests/unit/modules/ontology/ \
+            cognee/tests/unit/modules/observability/ \
+            cognee/tests/unit/modules/users/ \
+            cognee/tests/unit/modules/memify_tasks/ \
+            cognee/tests/unit/interfaces/graph/ \
+            cognee/tests/unit/infrastructure/databases/cache/ \
+            cognee/tests/unit/infrastructure/databases/vector/test_vector_db_config.py \
+            cognee/tests/unit/infrastructure/databases/relational/ \
+            cognee/tests/unit/infrastructure/databases/test_unified_store_engine.py \
+            cognee/tests/unit/infrastructure/session/ \
+            cognee/tests/unit/infrastructure/llm/ \
+            cognee/tests/unit/infrastructure/test_rate_limiting_retry.py \
+            cognee/tests/unit/tasks/storage/test_add_data_points.py \
+            cognee/tests/unit/shared/ \
+            cognee/tests/unit/exceptions/ \
+            -v --tb=short --timeout=300 --timeout-method=thread
+
+  cli-unit-tests:
+    name: CLI Unit Tests (Mocked, No Secrets)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      ENV: dev
+      RUNTIME__LOG_LEVEL: ERROR
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          python-version: "3.11"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked --dev
+
+      - name: Run CLI unit tests
+        run: uv run pytest cognee/tests/cli_tests/cli_unit_tests/ -v --tb=short --timeout=300 --timeout-method=thread
+
+  telemetry-test:
+    name: Telemetry Test (Mocked, No Secrets)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      ENV: dev
+      RUNTIME__LOG_LEVEL: ERROR
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          python-version: "3.11"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked --dev
+
+      - name: Run telemetry test
+        run: uv run pytest cognee/tests/test_telemetry.py -v --tb=short --timeout=300 --timeout-method=thread
