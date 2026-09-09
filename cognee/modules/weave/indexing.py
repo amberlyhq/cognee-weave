@@ -255,13 +255,15 @@ def _operation_lock_key(namespace: str, identity: bytes) -> int:
 
 
 @asynccontextmanager
-async def weave_operation_lock(organization_id: UUID, github_repository_id: int | None = None):
-    """Serialize tenant mutation, then repository mutation, across processes."""
+async def weave_operation_lock(
+    organization_id: UUID, github_repository_id: int | None = None, *, wait: bool = True
+):
+    """Serialize operations; optional advisory reads can decline a busy lock."""
 
     engine = get_relational_engine()
     async with engine.get_async_session() as session:
         if session.get_bind().dialect.name != "postgresql":
-            yield
+            yield True
             return
         keys = [_operation_lock_key("weave-organization", organization_id.bytes)]
         if github_repository_id is not None:
@@ -271,12 +273,22 @@ async def weave_operation_lock(organization_id: UUID, github_repository_id: int 
                     organization_id.bytes + github_repository_id.to_bytes(8, "big"),
                 )
             )
+        acquired_keys = []
         try:
             for key in keys:
-                await session.execute(text("SELECT pg_advisory_lock(:lock_key)"), {"lock_key": key})
-            yield
+                if wait:
+                    await session.execute(
+                        text("SELECT pg_advisory_lock(:lock_key)"), {"lock_key": key}
+                    )
+                elif not await session.scalar(
+                    text("SELECT pg_try_advisory_lock(:lock_key)"), {"lock_key": key}
+                ):
+                    yield False
+                    return
+                acquired_keys.append(key)
+            yield True
         finally:
-            for key in reversed(keys):
+            for key in reversed(acquired_keys):
                 await session.execute(
                     text("SELECT pg_advisory_unlock(:lock_key)"), {"lock_key": key}
                 )

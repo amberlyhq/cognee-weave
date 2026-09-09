@@ -21,6 +21,8 @@ Tests convert actual PDF, CSV, DOCX, PPTX, and XLSX fixtures and check repositor
 
 ## Required runtime settings
 
+Recall is advisory: if indexing, deletion, or another recall holds the organization's operation lock, Weave returns unavailable context immediately. Mutation calls retain their blocking locks, and successful recall still holds the lock while checking receipts and reading native memory. A real Postgres contention regression verifies that a busy recall neither waits for nor releases the writer's lock.
+
 ```text
 WEAVE_STRICT_MODE=true
 ENABLE_BACKEND_ACCESS_CONTROL=true

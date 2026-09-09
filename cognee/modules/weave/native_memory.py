@@ -174,9 +174,11 @@ async def recall_repository_memory(organization_id, request):
     from cognee.modules.weave.organizations import get_organization_binding
     from cognee.modules.weave.recall import _repository_reference, _unavailable
 
-    # Freeze selected revisions during retrieval. Repository writes take the
-    # corresponding shared organization lock, so cannot race this read.
-    async with weave_operation_lock(organization_id):
+    # Freeze revisions during retrieval, but never queue optional review context
+    # behind a long-running index or deletion of the customer dataset.
+    async with weave_operation_lock(organization_id, wait=False) as acquired:
+        if not acquired:
+            return _unavailable(organization_id, request, "unavailable", "backend_unavailable")
         binding = await get_organization_binding(organization_id)
         if binding is None:
             return _unavailable(

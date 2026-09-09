@@ -85,3 +85,35 @@ async def test_native_recall_routes_customer_datasets_but_never_organizations(
     assert response_b.status == "available"
     assert {item.github_repository_id for item in response_b.repositories} == {930003}
     assert offline_native_recall[1] == ([b_id], binding_b.service_user_id)
+
+
+@pytest.mark.asyncio
+async def test_recall_returns_unavailable_while_repository_index_holds_lock():
+    import asyncio
+    from uuid import uuid4
+
+    from cognee.modules.weave.contracts import RecallRequest
+    from cognee.modules.weave.indexing import weave_operation_lock
+    from cognee.modules.weave.recall import recall
+
+    organization_id = uuid4()
+    async with weave_operation_lock(organization_id, 920099):
+        task = asyncio.create_task(
+            recall(organization_id, RecallRequest(query="repository context"))
+        )
+        try:
+            done, _ = await asyncio.wait({task}, timeout=2)
+            assert task in done, "Advisory recall waited behind the indexing lock"
+            response = task.result()
+        finally:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        assert response.status == "unavailable"
+        assert [item.code for item in response.diagnostics] == ["backend_unavailable"]
+        async with weave_operation_lock(organization_id, wait=False) as acquired:
+            assert acquired is False
+
+    # The unsuccessful read must not retain a lock or release the writer's lock.
+    async with weave_operation_lock(organization_id, wait=False) as acquired:
+        assert acquired is True
