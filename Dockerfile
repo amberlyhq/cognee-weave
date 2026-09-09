@@ -22,7 +22,7 @@ ARG DEBUG
 # Example: docker build --build-arg COGNEE_EXTRAS="aws langchain" .
 # Keep this applied to both sync steps: the second exact sync would otherwise
 # remove extras installed only in the dependency-cache layer.
-ARG COGNEE_EXTRAS=""
+ARG COGNEE_EXTRAS="docling"
 
 # Set environment variable based on the build argument
 ENV DEBUG=${DEBUG}

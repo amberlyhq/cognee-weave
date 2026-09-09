@@ -24,7 +24,7 @@ jobs:
           python-version: "3.11"
           enable-cache: true
       - name: Install locked dependencies
-        run: uv sync --locked --dev --extra postgres
+        run: uv sync --locked --dev --extra postgres --extra docling
       - name: Ruff
         # The upstream tree has not yet adopted Ruff's opt-in modernization
         # rules. Keep this fork gate on Python correctness errors.
@@ -32,6 +32,7 @@ jobs:
       - name: Focused unit tests
         run: >-
           uv run pytest
+          cognee/tests/unit/infrastructure/loaders
           cognee/tests/unit/infrastructure/llm/test_transcribe_image.py
           cognee/tests/unit/infrastructure/llm/test_get_llm_client.py
           cognee/tests/unit/infrastructure/llm/test_llm_config.py

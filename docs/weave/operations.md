@@ -7,11 +7,17 @@ binding and one native memory dataset/schema shared by its repositories.
 
 ## Native image loading
 
-Repository screenshots and diagrams use Cognee's native `ImageLoader`. Weave routes image transcription to `openrouter/openai/gpt-4.1-mini`, while text extraction and recall retain `openrouter/openai/gpt-oss-120b`. Image requests preserve the same OpenRouter endpoint, credentials, and zero-data-retention routing options as text requests. No images are silently excluded.
+Repository screenshots and diagrams use Cognee's native `ImageLoader`. Weave routes image transcription to `openrouter/google/gemini-3.8-flash`, while text extraction and recall retain `openrouter/openai/gpt-oss-120b`. Image requests preserve the same OpenRouter endpoint, credentials, and zero-data-retention routing options as text requests. No images are silently excluded.
 
-The native OpenAI-compatible adapter accepts `IMAGE_TRANSCRIPTION_MODEL` for other Cognee callers; Weave pins its own image model. The model participates in client cache identity. Unit tests exercise the real image request construction and confirm image routing, privacy options, token limits, and unchanged text routing. The maintained fork CI runs these regressions.
+Our fork adds the `IMAGE_TRANSCRIPTION_MODEL` setting and connects it to Cognee's existing adapter parameter; this is not an upstream Cognee setting. When omitted or empty, image requests use the main LLM model. Weave explicitly sets Gemini 3.8 Flash for images. The model participates in client cache identity. Unit tests exercise the real image request construction and confirm image routing, the main-model fallback, privacy options, token limits, and unchanged text routing. The maintained fork CI runs these regressions.
 
-References: [Cognee loaders](https://docs.cognee.ai/core-concepts/further-concepts/loaders), [OpenRouter vision model](https://openrouter.ai/openai/gpt-4.1-mini).
+References: [Cognee loaders](https://docs.cognee.ai/core-concepts/further-concepts/loaders), [OpenRouter vision model](https://openrouter.ai/google/gemini-3.8-flash).
+
+## Repository document loaders
+
+The service image installs Cognee's `docling` extra for native Office and HTML conversion. Text PDFs keep the default PyPdf loader and CSV files keep the native CSV loader. The text loader also recognizes repository formats such as MDX, SQL, TOML, shell scripts, CSS, patches, and SVG; these are read as text, not executed or promoted to code-graph analysis. Native code-project partitioning still excludes dotfiles, caches, and unsupported binaries.
+
+Tests convert actual PDF, CSV, DOCX, PPTX, and XLSX fixtures and check repository text selection and content. This profile does not enable scanned-PDF OCR or audio/video transcription; native code-repository partitioning excludes audio/video. A successful direct Gemini image request proves provider connectivity, while completed staging repository indexing is a separate release acceptance check.
 
 ## Required runtime settings
 
