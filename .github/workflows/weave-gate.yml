@@ -32,6 +32,9 @@ jobs:
       - name: Focused unit tests
         run: >-
           uv run pytest
+          cognee/tests/unit/infrastructure/llm/test_transcribe_image.py
+          cognee/tests/unit/infrastructure/llm/test_get_llm_client.py
+          cognee/tests/unit/infrastructure/llm/test_llm_config.py
           cognee/tests/unit/test_context_global_variables.py
           cognee/tests/unit/infrastructure/databases/graph/test_postgres_adapter.py
           cognee/tests/unit/infrastructure/databases/vector

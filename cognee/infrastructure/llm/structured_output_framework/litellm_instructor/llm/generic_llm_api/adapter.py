@@ -384,7 +384,8 @@ class GenericAPIAdapter(LLMInterface):
             raise ValueError(
                 f"Could not determine MIME type for image file: {input}. Is the extension correct?"
             )
-        response: litellm.ModelResponse = await litellm.acompletion(
+        request_options = dict(self._base_llm_args)
+        request_options.update(
             model=self.image_transcribe_model,
             messages=[
                 {
@@ -412,4 +413,5 @@ class GenericAPIAdapter(LLMInterface):
             reasoning_effort=reasoning_effort,
             drop_params=True,
         )
+        response: litellm.ModelResponse = await litellm.acompletion(**request_options)
         return response

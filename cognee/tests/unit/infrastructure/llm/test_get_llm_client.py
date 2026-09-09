@@ -63,6 +63,7 @@ def test_llm_client_cache_key_covers_adapter_configuration_fields():
     base = _build_llm_client_cache_key(_llm_config(), max_completion_tokens=1024)
 
     changed_keys = [
+        _build_llm_client_cache_key(_llm_config(image_transcription_model="vision-model"), 1024),
         _build_llm_client_cache_key(_llm_config(llm_api_key="other-secret"), 1024),
         _build_llm_client_cache_key(_llm_config(llm_api_version="2024-02-01"), 1024),
         _build_llm_client_cache_key(_llm_config(llm_streaming=True), 1024),

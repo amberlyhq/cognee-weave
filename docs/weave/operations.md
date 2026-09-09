@@ -5,6 +5,14 @@ the `vector` extension. Neo4j is not deployed. Postgres stores the relational
 control plane, graph rows, and vectors. Each organization retains its primary
 binding and one native memory dataset/schema shared by its repositories.
 
+## Native image loading
+
+Repository screenshots and diagrams use Cognee's native `ImageLoader`. Weave routes image transcription to `openrouter/openai/gpt-4.1-mini`, while text extraction and recall retain `openrouter/openai/gpt-oss-120b`. Image requests preserve the same OpenRouter endpoint, credentials, and zero-data-retention routing options as text requests. No images are silently excluded.
+
+The native OpenAI-compatible adapter accepts `IMAGE_TRANSCRIPTION_MODEL` for other Cognee callers; Weave pins its own image model. The model participates in client cache identity. Unit tests exercise the real image request construction and confirm image routing, privacy options, token limits, and unchanged text routing. The maintained fork CI runs these regressions.
+
+References: [Cognee loaders](https://docs.cognee.ai/core-concepts/further-concepts/loaders), [OpenRouter vision model](https://openrouter.ai/openai/gpt-4.1-mini).
+
 ## Required runtime settings
 
 ```text

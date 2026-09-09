@@ -85,6 +85,7 @@ class OpenAIAdapter(GenericAPIAdapter):
         fallback_api_key: str | None = None,
         fallback_endpoint: str | None = None,
         llm_args: dict[str, Any] | None = None,
+        image_transcribe_model: str | None = None,
     ) -> None:
         super().__init__(
             api_key=api_key,
@@ -94,6 +95,7 @@ class OpenAIAdapter(GenericAPIAdapter):
             endpoint=endpoint,
             api_version=api_version,
             transcription_model=transcription_model,
+            image_transcribe_model=image_transcribe_model,
             fallback_model=fallback_model,
             fallback_api_key=fallback_api_key,
             fallback_endpoint=fallback_endpoint,
