@@ -165,8 +165,8 @@ async def test_recall_returns_safe_unavailable_when_organization_is_unknown(monk
         return None
 
     @asynccontextmanager
-    async def unlocked(*args):
-        yield
+    async def unlocked(*args, **kwargs):
+        yield True
 
     monkeypatch.setattr(organizations, "get_organization_binding", missing)
     monkeypatch.setattr(indexing, "weave_operation_lock", unlocked)
