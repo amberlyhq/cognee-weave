@@ -65,3 +65,52 @@ async def test_transcribe_image_defaults_are_backwards_compatible():
     kwargs = fake.call_args.kwargs
     assert _content_part(kwargs, "text")["text"] == "What's in this image?"
     assert kwargs["max_completion_tokens"] == 300
+
+
+@pytest.mark.asyncio
+async def test_weave_image_request_uses_vision_model_and_preserves_private_routing(monkeypatch):
+    from cognee.context_global_variables import llm_config
+    from cognee.infrastructure.llm.LLMGateway import LLMGateway
+    from cognee.modules.weave.config import get_weave_llm_config
+
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+    config = get_weave_llm_config()
+    token = llm_config.set(config)
+    fake = AsyncMock(return_value=_fake_response())
+    try:
+        with patch("litellm.acompletion", fake):
+            await LLMGateway.transcribe_image(str(IMAGE), max_completion_tokens=777)
+    finally:
+        llm_config.reset(token)
+    request = fake.call_args.kwargs
+    assert request["model"] == "openrouter/google/gemini-3.8-flash"
+    assert request["extra_body"]["provider"]["zdr"] is True
+    assert request["api_base"] == "https://openrouter.ai/api/v1"
+    assert request["max_completion_tokens"] == 777
+    assert config.llm_model == "openrouter/openai/gpt-oss-120b"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("image_settings", [{}, {"image_transcription_model": ""}])
+async def test_unset_image_model_uses_main_llm_through_gateway(monkeypatch, image_settings):
+    from cognee.context_global_variables import llm_config
+    from cognee.infrastructure.llm.config import LLMConfig
+    from cognee.infrastructure.llm.LLMGateway import LLMGateway
+
+    monkeypatch.delenv("IMAGE_TRANSCRIPTION_MODEL", raising=False)
+    config = LLMConfig(
+        llm_provider="openai",
+        llm_model="openrouter/openai/gpt-oss-120b",
+        llm_api_key="test-key",
+        llm_endpoint="https://openrouter.ai/api/v1",
+        structured_output_framework="litellm_native",
+        **image_settings,
+    )
+    token = llm_config.set(config)
+    fake = AsyncMock(return_value=_fake_response())
+    try:
+        with patch("litellm.acompletion", fake):
+            await LLMGateway.transcribe_image(str(IMAGE))
+    finally:
+        llm_config.reset(token)
+    assert fake.call_args.kwargs["model"] == config.llm_model

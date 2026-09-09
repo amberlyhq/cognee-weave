@@ -55,6 +55,7 @@ class _LLMClientCacheKey:
     streaming: bool
     max_completion_tokens: int
     transcription_model: str
+    image_transcription_model: str
     fallback_api_key_cache_key: _SecretCacheKey
     fallback_endpoint: str
     fallback_model: str
@@ -172,6 +173,7 @@ def _build_llm_client_cache_key(llm_config, max_completion_tokens: int) -> _LLMC
         streaming=llm_config.llm_streaming,
         max_completion_tokens=max_completion_tokens,
         transcription_model=llm_config.transcription_model,
+        image_transcription_model=llm_config.image_transcription_model,
         fallback_api_key_cache_key=_secret_cache_key(llm_config.fallback_api_key),
         fallback_endpoint=llm_config.fallback_endpoint,
         fallback_model=llm_config.fallback_model,
@@ -244,6 +246,7 @@ def _get_llm_client_cached(cache_key: _LLMClientCacheKey) -> LLMInterface:
             api_version=cache_key.api_version,
             model=cache_key.model,
             transcription_model=cache_key.transcription_model,
+            image_transcribe_model=cache_key.image_transcription_model or None,
             max_completion_tokens=max_completion_tokens,
             instructor_mode=cache_key.instructor_mode,
             streaming=cache_key.streaming,

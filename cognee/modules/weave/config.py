@@ -94,6 +94,7 @@ def get_weave_llm_config() -> LLMConfig:
         fallback_api_key="",
         llm_provider="openai",
         llm_model="openrouter/openai/gpt-oss-120b",
+        image_transcription_model="openrouter/google/gemini-3.8-flash",
         llm_endpoint="https://openrouter.ai/api/v1",
         llm_api_key=os.getenv("LLM_API_KEY") or os.getenv("OPENROUTER_API_KEY") or None,
         llm_args={"extra_body": {"provider": {"zdr": True}}},
