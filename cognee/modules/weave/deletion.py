@@ -89,9 +89,8 @@ async def _read_surface(
 
 
 async def _read_locked_surface(organization_id, repository_ids, surface) -> SurfaceResponse:
-    from cognee.modules.weave.memory_sources import source_records
     from cognee.modules.weave.native_memory import (
-        customer_dataset,
+        memory_datasets,
         customer_snapshots,
         snapshots_ready,
     )
@@ -106,19 +105,26 @@ async def _read_locked_surface(organization_id, repository_ids, surface) -> Surf
         for record in customer_records
     ):
         records = customer_records
-        if not snapshots_ready(records) or any(
-            s.status != "completed" for s in await source_records(binding)
-        ):
+        if not snapshots_ready(records):
             raise SurfaceNotFound()
-        dataset = await customer_dataset(binding)
-        if dataset is None:
+        datasets = await memory_datasets(binding, records)
+        if not datasets:
             raise SurfaceNotFound()
-        async with scoped_database_context_variables(dataset.id, binding.service_user_id):
-            graph = await get_graph_engine()
-            nodes, edges = await graph.get_filtered_graph_data([], max_nodes=500, max_edges=1000)
-        native = [
-            {"dataset_id": str(dataset.id), "scope": "customer", "nodes": nodes, "edges": edges}
-        ]
+        native = []
+        remaining_nodes, remaining_edges = 500, 1000
+        for dataset in datasets:
+            if remaining_nodes <= 0:
+                break
+            async with scoped_database_context_variables(dataset.id, binding.service_user_id):
+                graph = await get_graph_engine()
+                nodes, edges = await graph.get_filtered_graph_data(
+                    [], max_nodes=remaining_nodes, max_edges=remaining_edges
+                )
+            remaining_nodes -= len(nodes)
+            remaining_edges -= len(edges)
+            native.append(
+                {"dataset_id": str(dataset.id), "scope": "customer", "nodes": nodes, "edges": edges}
+            )
         payload = json.dumps(native, default=str, ensure_ascii=False)
         if len(payload) > 1000000:
             raise ValueError("Native graph exceeds the export size boundary")

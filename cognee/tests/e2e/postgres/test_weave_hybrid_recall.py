@@ -44,7 +44,7 @@ async def test_native_recall_routes_customer_datasets_but_never_organizations(
 ):
     from cognee.modules.weave.contracts import RecallRequest
     from cognee.modules.weave.indexing import index_repository_archive
-    from cognee.modules.weave.native_memory import customer_dataset
+    from cognee.modules.weave.native_memory import customer_dataset, repository_dataset
     from cognee.modules.weave.organizations import provision_organization
     from cognee.modules.weave.recall import recall
 
@@ -77,14 +77,21 @@ async def test_native_recall_routes_customer_datasets_but_never_organizations(
     assert {item.github_repository_id for item in response_a.repositories} == {930001, 930002}
     assert not response_a.graph_candidates and not response_a.vector_candidates
     assert response_a.native_memory
-    a_ids = {(await customer_dataset(binding_a)).id}
+    a_ids = {
+        binding_a.dataset_id,
+        (await repository_dataset(binding_a, 930001)).id,
+        (await repository_dataset(binding_a, 930002)).id,
+    }
     b_id = (await customer_dataset(binding_b)).id
     assert set(offline_native_recall[0][0]) == a_ids
     assert offline_native_recall[0][1] == binding_a.service_user_id
     assert b_id not in a_ids
     assert response_b.status == "available"
     assert {item.github_repository_id for item in response_b.repositories} == {930003}
-    assert offline_native_recall[1] == ([b_id], binding_b.service_user_id)
+    assert offline_native_recall[1] == (
+        [(await repository_dataset(binding_b, 930003)).id, b_id],
+        binding_b.service_user_id,
+    )
 
 
 @pytest.mark.asyncio

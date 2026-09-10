@@ -15,7 +15,7 @@ from cognee.modules.users.methods import get_user
 from cognee.modules.weave.config import get_weave_embedding_config, get_weave_llm_config
 from cognee.modules.weave.scope import native_organization
 
-NATIVE_PIPELINE_VERSION = "weave-native-memory.v2"
+NATIVE_PIPELINE_VERSION = "weave-native-memory.v3"
 
 
 async def customer_dataset(binding):
@@ -66,15 +66,17 @@ async def repository_dataset(binding, repository_id: int):
         )
 
 
-async def forget_repository(binding, repository_id: int) -> None:
+async def forget_repository(binding, repository_id: int, *, preserve_reviews: bool = False) -> None:
     from cognee.modules.weave.memory_sources import forget_source, source_records
 
     user = await get_user(binding.service_user_id)
     async with scoped_database_context_variables(binding.dataset_id, user.id):
         for record in await source_records(binding, repository_id):
+            if preserve_reviews and record.source_key.startswith("review:"):
+                continue
             await forget_source(binding, user, record)
-    # Legacy datasets are retained during indexing migration. An explicit
-    # repository removal must still remove that repository's legacy memory.
+    # Remove the dedicated native dataset for this repository, including an
+    # interrupted build or a dataset created by the original directory pipeline.
     dataset = await repository_dataset(binding, repository_id)
     if dataset is None:
         return
@@ -118,42 +120,54 @@ async def forget_organization_memory(binding) -> None:
 
 
 async def remember_repository(binding, request, repository):
-    from cognee.modules.weave.memory_sources import forget_source, source_records, sync_source
-    from cognee.modules.weave.repository_sources import prepare_repository_sources
+    import cognee
+    from cognee.modules.data.methods.create_authorized_dataset import create_authorized_dataset
+    from cognee.modules.weave.memory_sources import assert_native_completed
+    from cognee.modules.weave.repository_sources import prepare_repository_directory
 
-    # Caller holds the operation lock and has marked the snapshot running.
-    # Replace individual native sources, never the customer dataset.
+    # A repository is one native directory ingestion. Rebuild its dedicated
+    # dataset so removed files and A -> B -> A cannot leave stale source memory.
+    # Review memory lives separately and survives repository replacement.
     embedding = get_weave_embedding_config()
     llm = get_weave_llm_config()
     user = await get_user(binding.service_user_id)
-    dataset = await customer_dataset(binding)
-    if dataset is None:
-        raise LookupError("Customer dataset not found")
-    async with scoped_database_context_variables(
-        dataset.id, user.id, llm_config=llm, embedding_config=embedding
-    ):
-        sources = await prepare_repository_sources(
-            repository, request, user=user, dataset_id=dataset.id
-        )
-        wanted = {key for key, _, _ in sources}
-        for record in await source_records(binding, request.github_repository_id):
-            if not record.source_key.startswith("review:") and record.source_key not in wanted:
-                await forget_source(binding, user, record)
-        actions = []
-        for key, item, fingerprint in sources:
-            actions.append(
-                await sync_source(
-                    binding,
-                    user,
-                    request.github_repository_id,
-                    key,
-                    item,
-                    fingerprint,
-                    llm=llm,
-                    embedding=embedding,
-                )
+    await forget_repository(binding, request.github_repository_id, preserve_reviews=True)
+    dataset = await create_authorized_dataset(
+        repository_dataset_name(binding.organization_id, request.github_repository_id), user
+    )
+    repository = prepare_repository_directory(repository, request)
+    token = native_organization.set(binding.organization_id)
+    try:
+        async with scoped_database_context_variables(
+            dataset.id, user.id, llm_config=llm, embedding_config=embedding
+        ):
+            result = await cognee.remember(
+                str(repository),
+                dataset_id=dataset.id,
+                user=user,
+                llm_config=llm,
+                embedding_config=embedding,
             )
-        return actions
+            assert_native_completed(result)
+            return result
+    finally:
+        native_organization.reset(token)
+
+
+async def memory_datasets(binding, records):
+    """Resolve only this customer's native repository and review datasets."""
+    from cognee.modules.weave.memory_sources import source_records
+
+    sources = await source_records(binding)
+    # A partially migrated V2 source must never leak stale repository content
+    # into the review dataset used by native cross-repository recall.
+    if any(s.status != "completed" or not s.source_key.startswith("review:") for s in sources):
+        return []
+    datasets = [await repository_dataset(binding, r.github_repository_id) for r in records]
+    reviews = await customer_dataset(binding)
+    if reviews is None or any(d is None for d in datasets):
+        return []
+    return [*datasets, reviews]
 
 
 def snapshots_ready(records) -> bool:
@@ -170,7 +184,6 @@ async def recall_repository_memory(organization_id, request):
     import cognee
     from cognee.modules.weave.contracts import RecallResponse
     from cognee.modules.weave.indexing import weave_operation_lock
-    from cognee.modules.weave.memory_sources import source_records
     from cognee.modules.weave.organizations import get_organization_binding
     from cognee.modules.weave.recall import _repository_reference, _unavailable
 
@@ -184,11 +197,10 @@ async def recall_repository_memory(organization_id, request):
             return _unavailable(
                 organization_id, request, "unavailable", "organization_not_provisioned"
             )
-        # Native recall searches the customer dataset, so disclose and validate
+        # Native recall searches owned customer datasets, so disclose and validate
         # every repository receipt, including incomplete first-time indexes.
         records = await customer_snapshots(organization_id)
-        sources = await source_records(binding)
-        if not snapshots_ready(records) or any(s.status != "completed" for s in sources):
+        if not snapshots_ready(records):
             return _unavailable(organization_id, request, "unavailable", "no_indexed_repository")
         selected = {record.github_repository_id for record in records}
         required = set(request.github_repository_ids)
@@ -196,18 +208,18 @@ async def recall_repository_memory(organization_id, request):
             required.add(request.primary_github_repository_id)
         if not required.issubset(selected):
             return _unavailable(organization_id, request, "unavailable", "no_indexed_repository")
-        dataset = await customer_dataset(binding)
-        if dataset is None:
+        datasets = await memory_datasets(binding, records)
+        if not datasets:
             return _unavailable(organization_id, request, "unavailable", "no_indexed_repository")
         user = await get_user(binding.service_user_id)
         embedding = get_weave_embedding_config()
         llm = get_weave_llm_config()
         async with scoped_database_context_variables(
-            dataset.id, user.id, llm_config=llm, embedding_config=embedding
+            datasets[0].id, user.id, llm_config=llm, embedding_config=embedding
         ):
             result = await cognee.recall(
                 request.query,
-                dataset_ids=[dataset.id],
+                dataset_ids=[dataset.id for dataset in datasets],
                 user=user,
                 top_k=request.top_k,
                 llm_config=llm,

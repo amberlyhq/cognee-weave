@@ -137,7 +137,7 @@ async def test_every_surface_stays_scoped_through_repository_and_organization_de
         with pytest.raises(SurfaceNotFound, match="Resource not found"):
             await delete_repository(organization_a, repository_id, 1)
 
-    # Explicit cleanup still handles a retained V1 dataset independently of V2.
+    # Explicit cleanup removes the dedicated native repository dataset.
     from cognee.modules.data.methods.create_authorized_dataset import create_authorized_dataset
     from cognee.modules.users.methods import get_user
 
@@ -172,8 +172,8 @@ async def test_every_surface_stays_scoped_through_repository_and_organization_de
     assert await customer_dataset(binding_a) is not None
     assert await customer_dataset(binding_b) is not None
     assert not await source_records(binding_a, 940001)
-    assert await source_records(binding_a, 940002)
-    assert await source_records(binding_b, 940003)
+    assert await repository_dataset(binding_a, 940002)
+    assert await repository_dataset(binding_b, 940003)
 
     # Index delivery alone cannot revive a removed repository. Only the
     # separately verified GitHub installation lifecycle may reactivate it.

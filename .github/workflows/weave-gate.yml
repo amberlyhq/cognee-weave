@@ -108,6 +108,7 @@ jobs:
           cognee/tests/e2e/postgres/test_shared_schema_isolation.py
           cognee/tests/e2e/postgres/test_shared_schema_concurrency.py
           cognee/tests/e2e/postgres/test_tenant_graph_retrieval.py
+          cognee/tests/e2e/postgres/test_weave_lock_wait.py
           cognee/tests/e2e/postgres/test_weave_native_storage.py
           cognee/tests/e2e/postgres/test_pgvector_hnsw_plan.py
           cognee/tests/e2e/postgres/test_weave_exact_sha_indexing.py
