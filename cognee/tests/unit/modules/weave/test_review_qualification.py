@@ -96,6 +96,8 @@ async def test_native_gateway_selects_only_useful_passages(monkeypatch):
     from cognee.infrastructure.llm.LLMGateway import LLMGateway
 
     async def model(**kwargs):
+        if kwargs["response_model"].__name__ == "KnowledgeAudit":
+            return kwargs["response_model"](issues=[])
         assert kwargs["response_model"] is KnowledgeSelection
         assert "generic" in kwargs["system_prompt"]
         assert "untrusted" in kwargs["system_prompt"]
@@ -119,6 +121,8 @@ async def test_invalid_selection_gets_feedback_then_corrected(monkeypatch):
     calls = []
 
     async def model(**kwargs):
+        if kwargs["response_model"].__name__ == "KnowledgeAudit":
+            return kwargs["response_model"](issues=[])
         calls.append(kwargs)
         if len(calls) == 1:
             return KnowledgeSelection(
@@ -147,6 +151,8 @@ async def test_invalid_qualification_exhausts_bounded_feedback_attempts(monkeypa
     calls = []
 
     async def model(**kwargs):
+        if kwargs["response_model"].__name__ == "KnowledgeAudit":
+            return kwargs["response_model"](issues=[])
         calls.append(kwargs)
         return KnowledgeSelection(facts=[selection_fact(code_path="invented.ts")])
 
@@ -268,6 +274,8 @@ async def test_exhausted_correction_keeps_only_individually_valid_facts(monkeypa
     calls = []
 
     async def model(**kwargs):
+        if kwargs["response_model"].__name__ == "KnowledgeAudit":
+            return kwargs["response_model"](issues=[])
         calls.append(kwargs)
         return KnowledgeSelection(facts=[selection_fact(), selection_fact(code_path="invented.ts")])
 
@@ -353,3 +361,133 @@ def test_heading_alone_does_not_support_a_detailed_behavior_claim(quote):
             Qualification(facts=[fact(evidence=[dict(evidence_id="final", quote=quote)])]),
             {"final": "payments/retry.ts\n" + quote},
         )
+
+
+@pytest.mark.asyncio
+async def test_unsupported_claim_receives_audit_feedback_before_memory(monkeypatch):
+    from cognee.modules.weave.review_qualification import KnowledgeSelection, qualify_review
+    from cognee.infrastructure.llm.LLMGateway import LLMGateway
+
+    selections = 0
+    audits = 0
+
+    async def model(**kwargs):
+        nonlocal selections, audits
+        cls = kwargs["response_model"]
+        if cls.__name__ == "KnowledgeAudit":
+            audits += 1
+            return cls(
+                issues=[
+                    {"fact_index": 0, "reason": "The evidence says two added tests, not seven."}
+                ]
+                if audits == 1
+                else []
+            )
+        selections += 1
+        if selections > 1:
+            assert "two added tests, not seven" in kwargs["text_input"]
+        return KnowledgeSelection(
+            facts=[
+                selection_fact(
+                    statement="payments/retry.ts adds seven tests."
+                    if selections == 1
+                    else "payments/retry.ts adds two tests."
+                )
+            ]
+        )
+
+    monkeypatch.setattr(LLMGateway, "acreate_structured_output", model)
+    result = await qualify_review(request(content="payments/retry.ts adds two tests."))
+    assert selections == audits == 2
+    assert result.facts[0].statement == "payments/retry.ts adds two tests."
+
+
+@pytest.mark.asyncio
+async def test_exhaustion_cannot_bypass_claim_audit(monkeypatch):
+    from cognee.modules.weave.review_qualification import KnowledgeSelection, qualify_review
+    from cognee.infrastructure.llm.LLMGateway import LLMGateway
+
+    audit_calls = 0
+
+    async def model(**kwargs):
+        nonlocal audit_calls
+        cls = kwargs["response_model"]
+        if cls.__name__ == "KnowledgeAudit":
+            audit_calls += 1
+            return cls(issues=[dict(fact_index=0, reason="The quote does not support this claim.")])
+        return KnowledgeSelection(
+            facts=[selection_fact(statement="Payments are guaranteed never to fail.")]
+        )
+
+    monkeypatch.setattr(LLMGateway, "acreate_structured_output", model)
+    with pytest.raises(ValueError, match="Knowledge audit"):
+        await qualify_review(request())
+    assert audit_calls == 3
+
+
+@pytest.mark.asyncio
+async def test_exhaustion_retains_only_audit_accepted_facts(monkeypatch):
+    from cognee.modules.weave.review_qualification import KnowledgeSelection, qualify_review
+    from cognee.infrastructure.llm.LLMGateway import LLMGateway
+
+    async def model(**kwargs):
+        cls = kwargs["response_model"]
+        if cls.__name__ == "KnowledgeAudit":
+            return cls(
+                issues=[dict(fact_index=1, reason="Success is not guaranteed by this evidence.")]
+            )
+        return KnowledgeSelection(
+            facts=[
+                selection_fact(),
+                selection_fact(statement="Payments are guaranteed never to fail."),
+            ]
+        )
+
+    monkeypatch.setattr(LLMGateway, "acreate_structured_output", model)
+    result = await qualify_review(request())
+    assert [f.statement for f in result.facts] == [fact()["statement"]]
+
+
+def test_selector_is_not_offered_locator_only_passages():
+    from cognee.modules.weave.review_qualification import evidence_passages
+
+    packet = {
+        "final": 'references: - {"path": "payments/retry.ts", "startLine": 1}\nRetries preserve payment identity.'
+    }
+    passages = evidence_passages(packet)
+    assert [q for _, q in passages.values()] == ["Retries preserve payment identity."]
+
+
+def test_reporter_provenance_downgrades_observed_selection():
+    from cognee.modules.weave.review_qualification import KnowledgeSelection, attach_evidence
+
+    result = attach_evidence(
+        KnowledgeSelection(facts=[selection_fact(certainty="observed")]),
+        {"E1": ("final", request().content)},
+    )
+    assert result.facts[0].certainty == "reported"
+
+
+@pytest.mark.asyncio
+async def test_audited_facts_survive_later_failed_corrections(monkeypatch):
+    from cognee.modules.weave.review_qualification import KnowledgeSelection, qualify_review
+    from cognee.infrastructure.llm.LLMGateway import LLMGateway
+
+    attempts = 0
+
+    async def model(**kwargs):
+        nonlocal attempts
+        cls = kwargs["response_model"]
+        if cls.__name__ == "KnowledgeAudit":
+            return cls(issues=[])
+        attempts += 1
+        if attempts == 1:
+            return KnowledgeSelection(
+                facts=[selection_fact(), selection_fact(code_path="invented.ts")]
+            )
+        return KnowledgeSelection(facts=[selection_fact(code_path="invented.ts")])
+
+    monkeypatch.setattr(LLMGateway, "acreate_structured_output", model)
+    result = await qualify_review(request())
+    assert attempts == 3
+    assert [f.statement for f in result.facts] == [fact()["statement"]]
