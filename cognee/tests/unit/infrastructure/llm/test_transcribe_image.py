@@ -4,6 +4,7 @@ Only litellm.acompletion (the network boundary) is mocked, so the adapter's real
 construction — base64 encoding, MIME detection, message assembly, prompt/cap wiring — is exercised.
 """
 
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -84,7 +85,7 @@ async def test_weave_image_request_uses_vision_model_and_preserves_private_routi
         llm_config.reset(token)
     request = fake.call_args.kwargs
     assert request["model"] == "openrouter/google/gemini-3.8-flash"
-    assert request["extra_body"]["provider"]["zdr"] is True
+    assert request["extra_body"]["provider"] == {"zdr": True}
     assert request["api_base"] == "https://openrouter.ai/api/v1"
     assert request["max_completion_tokens"] == 777
     assert config.llm_model == "openrouter/openai/gpt-oss-120b"
@@ -114,3 +115,33 @@ async def test_unset_image_model_uses_main_llm_through_gateway(monkeypatch, imag
     finally:
         llm_config.reset(token)
     assert fake.call_args.kwargs["model"] == config.llm_model
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("image_args", [None, {}, {"extra_body": {"provider": {"zdr": True}}}])
+async def test_image_request_args_override_without_mutating_memory_config(monkeypatch, image_args):
+    from cognee.context_global_variables import llm_config
+    from cognee.infrastructure.llm.config import LLMConfig
+    from cognee.infrastructure.llm.LLMGateway import LLMGateway
+
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+    memory_args = {"extra_body": {"provider": {"only": ["cerebras", "groq"], "zdr": True}}}
+    config = LLMConfig(
+        llm_provider="openai",
+        llm_model="openrouter/openai/gpt-oss-120b",
+        image_transcription_model="openrouter/google/gemini-3.8-flash",
+        llm_api_key="test-key",
+        llm_args=memory_args,
+        image_transcription_llm_args=image_args,
+    )
+    original_args = deepcopy(config.llm_args)
+    token = llm_config.set(config)
+    fake = AsyncMock(return_value=_fake_response())
+    try:
+        with patch("litellm.acompletion", fake):
+            await LLMGateway.transcribe_image(str(IMAGE))
+    finally:
+        llm_config.reset(token)
+    expected = memory_args if image_args is None else image_args
+    assert fake.call_args.kwargs.get("extra_body") == expected.get("extra_body")
+    assert config.llm_args == original_args

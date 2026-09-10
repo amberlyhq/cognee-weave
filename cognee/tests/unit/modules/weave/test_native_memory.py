@@ -108,3 +108,43 @@ async def test_strict_schema_deletion_requires_a_native_organization_before_conn
         await drop_pg_schema_if_exists(
             "unused", "ds_" + "a" * 32, "unused", 5432, "unused", "unused"
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["extraction", "summarization", "query"])
+async def test_native_memory_requests_prefer_cerebras_with_groq_fallback(monkeypatch, stage):
+    from unittest.mock import AsyncMock, patch
+
+    from cognee.context_global_variables import llm_config
+    from cognee.infrastructure.llm.LLMGateway import LLMGateway
+    from cognee.modules.weave.config import get_weave_llm_config
+    from cognee.shared.data_models import SummarizedContent
+
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+    config = get_weave_llm_config().stage_config(stage)
+    token = llm_config.set(config)
+    fake = AsyncMock(
+        return_value=SimpleNamespace(
+            choices=[
+                SimpleNamespace(message=SimpleNamespace(content='{"summary":"Synthetic test."}'))
+            ]
+        )
+    )
+    try:
+        with patch("litellm.acompletion", fake):
+            result = await LLMGateway.acreate_structured_output(
+                "Synthetic test.", "Summarize the input.", SummarizedContent
+            )
+    finally:
+        llm_config.reset(token)
+    assert result.summary == "Synthetic test."
+    request = fake.call_args.kwargs
+    assert request["model"] == "openrouter/openai/gpt-oss-120b"
+    assert request["response_format"] is SummarizedContent
+    assert request["extra_body"]["provider"] == {
+        "order": ["cerebras", "groq"],
+        "only": ["cerebras", "groq"],
+        "allow_fallbacks": True,
+        "require_parameters": True,
+        "zdr": True,
+    }

@@ -8,11 +8,30 @@ native dataset/schema owned by the same organization.
 
 ## Native image loading
 
-Repository screenshots and diagrams use Cognee's native `ImageLoader`. Weave routes image transcription to `openrouter/google/gemini-3.8-flash`, while text extraction and recall retain `openrouter/openai/gpt-oss-120b`. Image requests preserve the same OpenRouter endpoint, credentials, and zero-data-retention routing options as text requests. No images are silently excluded.
+Repository screenshots and diagrams use Cognee's native `ImageLoader`. Weave routes image transcription to `openrouter/google/gemini-3.8-flash`, while text extraction and recall retain `openrouter/openai/gpt-oss-120b`. Image requests preserve the same OpenRouter endpoint, credentials, and zero-data-retention requirement as text requests, with independent provider routing. No images are silently excluded.
 
 Our fork adds the `IMAGE_TRANSCRIPTION_MODEL` setting and connects it to Cognee's existing adapter parameter; this is not an upstream Cognee setting. When omitted or empty, image requests use the main LLM model. Weave explicitly sets Gemini 3.8 Flash for images. The model participates in client cache identity. Unit tests exercise the real image request construction and confirm image routing, the main-model fallback, privacy options, token limits, and unchanged text routing. The maintained fork CI runs these regressions.
 
 References: [Cognee loaders](https://docs.cognee.ai/core-concepts/further-concepts/loaders), [OpenRouter vision model](https://openrouter.ai/google/gemini-3.8-flash).
+
+## Memory provider routing
+
+Weave keeps Cognee's native `litellm_native` adapter and the existing memory model.
+Its OpenRouter request policy tries Cerebras first and Groq second, allows only
+those two providers, requires support for the requested parameters, and enforces
+zero data retention. OpenRouter performs provider fallback when a request fails;
+a successful HTTP response that later fails Cognee validation does not necessarily
+trigger that fallback. Cognee retains its native validation and retry behavior.
+
+The fork's optional `IMAGE_TRANSCRIPTION_LLM_ARGS` replaces `LLM_ARGS` for image
+requests only. `None` inherits the main request arguments; `{}` clears them.
+Weave explicitly supplies `{"extra_body":{"provider":{"zdr":true}}}` for images,
+so the Cerebras/Groq restriction cannot reach the Gemini image model. Image
+arguments participate in client cache identity without changing the memory config.
+These Weave policies are set in `get_weave_llm_config`, including for each native
+memory stage; unrelated host provider settings do not override them.
+
+Reference: [OpenRouter provider routing](https://openrouter.ai/docs/guides/routing/provider-selection).
 
 ## Repository document loaders
 

@@ -166,7 +166,7 @@ class LLMGateway:
             get_llm_client,
         )
 
-        llm_client = get_llm_client()
+        llm_client = get_llm_client(for_image=True)
         return llm_client.transcribe_image(
             input=input,
             prompt=prompt,

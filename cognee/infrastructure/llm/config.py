@@ -128,6 +128,8 @@ class LLMConfig(BaseSettings):
 
     transcription_model: str = "whisper-1"
     image_transcription_model: str = ""
+    # None inherits llm_args; a supplied dict replaces them for image requests.
+    image_transcription_llm_args: dict[str, Any] | None = None
     graph_prompt_path: str = "generate_graph_prompt.txt"
     temporal_graph_prompt_path: str = "generate_event_graph_prompt.txt"
     event_entity_prompt_path: str = "generate_event_entity_prompt.txt"

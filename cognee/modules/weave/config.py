@@ -97,5 +97,16 @@ def get_weave_llm_config() -> LLMConfig:
         image_transcription_model="openrouter/google/gemini-3.8-flash",
         llm_endpoint="https://openrouter.ai/api/v1",
         llm_api_key=os.getenv("LLM_API_KEY") or os.getenv("OPENROUTER_API_KEY") or None,
-        llm_args={"extra_body": {"provider": {"zdr": True}}},
+        llm_args={
+            "extra_body": {
+                "provider": {
+                    "order": ["cerebras", "groq"],
+                    "only": ["cerebras", "groq"],
+                    "allow_fallbacks": True,
+                    "require_parameters": True,
+                    "zdr": True,
+                }
+            }
+        },
+        image_transcription_llm_args={"extra_body": {"provider": {"zdr": True}}},
     )

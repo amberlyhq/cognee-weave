@@ -378,7 +378,7 @@ def _get_llm_client_cached(cache_key: _LLMClientCacheKey) -> LLMInterface:
         raise UnsupportedLLMProviderError(provider)
 
 
-def get_llm_client(raise_api_key_error: bool = True) -> LLMInterface:
+def get_llm_client(raise_api_key_error: bool = True, *, for_image: bool = False) -> LLMInterface:
     """
     Get the LLM client based on the configuration using Enums.
 
@@ -394,6 +394,12 @@ def get_llm_client(raise_api_key_error: bool = True) -> LLMInterface:
         configuration.
     """
     llm_config = get_llm_context_config()
+    if for_image and llm_config.image_transcription_llm_args is not None:
+        # Copy before cache lookup so image routing neither changes shared memory
+        # settings nor reuses a client constructed with different request args.
+        llm_config = llm_config.model_copy(
+            update={"llm_args": llm_config.image_transcription_llm_args}
+        )
 
     provider = LLMProvider(llm_config.llm_provider)
     _raise_for_missing_api_key(
