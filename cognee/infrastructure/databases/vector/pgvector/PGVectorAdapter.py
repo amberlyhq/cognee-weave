@@ -94,6 +94,7 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
         self._write_locks: dict[str, asyncio.Lock] = {}
         self._hnsw_indexed_collections: set[str] = set()
         self._metadata = MetaData()
+        self._metadata_lock = asyncio.Lock()
         # True when this adapter created its own engine and must dispose it on close().
         # False when the engine is borrowed from the relational adapter.
         self._owns_engine: bool = False
@@ -268,25 +269,11 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
 
             - bool: Returns True if the collection exists, False otherwise.
         """
-        metadata_key = f"{self.schema}.{collection_name}" if self.schema else collection_name
-        if metadata_key in self._metadata.tables:
-            return True
-
-        if self.schema:
-            async with self.engine.begin() as connection:
-                return await connection.run_sync(
-                    lambda sync_connection: inspect(sync_connection).has_table(
-                        collection_name, schema=self.schema
-                    )
-                )
-
         try:
-            async with self.engine.begin() as connection:
-                await connection.run_sync(self._metadata.reflect, only=[collection_name])
-        except exc.InvalidRequestError:
+            await self.get_table(collection_name)
+            return True
+        except CollectionNotFoundError:
             return False
-
-        return collection_name in self._metadata.tables
 
     @retry(
         retry=retry_if_exception_type(
@@ -318,23 +305,9 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
                         # schema-qualified; IF NOT EXISTS handles concurrent
                         # creators without consulting search_path.
                         await connection.execute(CreateTable(collection_table, if_not_exists=True))
-                    # Reflect AFTER the DDL transaction commits so
-                    # _metadata is never populated for a table that
-                    # might be rolled back.
-                    async with self.engine.begin() as connection:
-                        if self.schema:
-                            await connection.run_sync(
-                                lambda sync_connection: Table(
-                                    collection_name,
-                                    self._metadata,
-                                    schema=self.schema,
-                                    autoload_with=sync_connection,
-                                )
-                            )
-                        else:
-                            await connection.run_sync(
-                                self._metadata.reflect, only=[collection_name]
-                            )
+                    # Publish metadata only after DDL commits, using the same
+                    # reflection lock as readers so they never see partial columns.
+                    await self.get_table(collection_name)
 
         if collection_name not in self._hnsw_indexed_collections:
             async with self.VECTOR_DB_LOCK:
@@ -476,14 +449,17 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
         )
 
     async def get_table(self, collection_name: str) -> Table:
-        """
-        Dynamically loads a table using the given collection name
-        with an async engine.
-        """
+        # SQLAlchemy registers Table in MetaData before asynchronous reflection
+        # finishes. Readers must wait for that reflection, including cache hits.
+        async with self._metadata_lock:
+            return await self._get_table(collection_name)
+
+    async def _get_table(self, collection_name: str) -> Table:
         metadata_key = f"{self.schema}.{collection_name}" if self.schema else collection_name
         if metadata_key in self._metadata.tables:
             return self._metadata.tables[metadata_key]
 
+        existing_tables = set(self._metadata.tables)
         try:
             async with self.engine.begin() as connection:
                 if self.schema:
@@ -497,10 +473,17 @@ class PGVectorAdapter(SQLAlchemyAdapter, VectorDBInterface):
                     )
                 else:
                     await connection.run_sync(self._metadata.reflect, only=[collection_name])
-        except exc.InvalidRequestError:
-            raise CollectionNotFoundError(
-                f"Collection '{collection_name}' not found!",
-            )
+        except BaseException as error:
+            # Cancellation also interrupts reflection after Table registration.
+            # Remove every table added by this incomplete reflection before a
+            # waiting reader can inspect the cache, including reflected FKs.
+            for key in set(self._metadata.tables) - existing_tables:
+                self._metadata.remove(self._metadata.tables[key])
+            if isinstance(error, exc.InvalidRequestError):
+                raise CollectionNotFoundError(
+                    f"Collection '{collection_name}' not found!",
+                ) from error
+            raise
 
         if metadata_key in self._metadata.tables:
             return self._metadata.tables[metadata_key]
