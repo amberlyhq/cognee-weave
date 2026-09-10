@@ -116,6 +116,7 @@ jobs:
           cognee/tests/e2e/postgres/test_weave_native_storage.py
           cognee/tests/e2e/postgres/test_weave_gradual_review_memory.py
           cognee/tests/e2e/postgres/test_pgvector_hnsw_plan.py
+          cognee/tests/e2e/postgres/test_pgvector_concurrent_reflection.py
           cognee/tests/e2e/postgres/test_weave_exact_sha_indexing.py
           cognee/tests/e2e/postgres/test_weave_hybrid_recall.py
           cognee/tests/e2e/postgres/test_weave_surface_isolation.py
