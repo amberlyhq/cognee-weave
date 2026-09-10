@@ -52,6 +52,23 @@ async def test_qualified_review_uses_native_memory_and_replays_without_model_cal
             cls = kwargs.get("response_model") or args[2]
             calls.append(cls.__name__)
             if cls.__name__ == "Qualification":
+                if calls.count("Qualification") == 1:
+                    return cls(
+                        facts=[
+                            dict(
+                                statement="MessagePayment never returns any message.",
+                                code_path="main.go",
+                                certainty="reported",
+                                evidence=[
+                                    dict(
+                                        evidence_id="final",
+                                        quote="main.go MessagePayment NEVER returns a payment message.",
+                                    )
+                                ],
+                            )
+                        ]
+                    )
+                assert "absent evidence" in kwargs["text_input"]
                 return cls(
                     facts=[
                         dict(
@@ -128,7 +145,7 @@ async def test_qualified_review_uses_native_memory_and_replays_without_model_cal
         before = list(calls)
         assert (await remember_review(binding.organization_id, req)).status == "unchanged"
         assert calls == before
-        assert calls.count("Qualification") == 1
+        assert calls.count("Qualification") == 2
         assert (
             await remember_review(
                 binding.organization_id, req.model_copy(update={"artifact_revision": 0})

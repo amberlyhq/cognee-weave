@@ -82,35 +82,57 @@ def request_hash(request):
 
 
 def validate_qualification(result, packet):
-    for fact in result.facts:
-        for evidence in fact.evidence:
+    issues = []
+    for index, fact in enumerate(result.facts):
+        for quote_index, evidence in enumerate(fact.evidence):
             if (
                 evidence.evidence_id not in packet
                 or evidence.quote not in packet[evidence.evidence_id]
             ):
-                raise ValueError("Qualified knowledge cites absent evidence")
+                issues.append(
+                    f"facts[{index}].evidence[{quote_index}] cites absent evidence: copy an exact "
+                    f"substring of evidence ID {evidence.evidence_id!r}; do not paraphrase the quote."
+                )
         if not any(fact.code_path in evidence.quote for evidence in fact.evidence):
-            raise ValueError("Qualified knowledge code path is absent from cited evidence")
+            issues.append(
+                f"facts[{index}].code_path: code path is absent from cited evidence; cite its exact spelling."
+            )
         if fact.code_path.startswith(("/", "http:", "https:")) or ".." in fact.code_path.split("/"):
-            raise ValueError("Qualified knowledge requires a repository-relative path")
+            issues.append(f"facts[{index}].code_path requires a repository-relative path.")
+    if issues:
+        raise ValueError("Qualified knowledge rejected: " + "\n".join(issues))
     return result
 
 
 async def qualify_review(request):
     packet = evidence_packet(request)
-    result = await LLMGateway.acreate_structured_output(
-        text_input=json.dumps(
-            {
-                "repository_id": request.github_repository_id,
-                "review_id": str(request.review_id),
-                "head_sha": request.head_sha,
-                "evidence": packet,
-            }
-        ),
-        system_prompt=PROMPT,
-        response_model=Qualification,
-    )
-    return validate_qualification(result, packet)
+    original = {
+        "repository_id": request.github_repository_id,
+        "review_id": str(request.review_id),
+        "head_sha": request.head_sha,
+        "evidence": packet,
+    }
+    repair = None
+    # Semantic validation belongs in a feedback loop too. Schema-valid model
+    # output can still paraphrase an exact quote or cite an unknown evidence ID.
+    # Return every issue together; keep the original evidence on each attempt.
+    for attempt in range(3):
+        result = await LLMGateway.acreate_structured_output(
+            text_input=json.dumps({**original, **({"repair": repair} if repair else {})}),
+            system_prompt=PROMPT
+            + "\nIf repair is present, correct ALL listed issues in the rejected "
+            "output and return a complete replacement. Copy quotes verbatim from the original "
+            "evidence values, preserving whitespace and punctuation. Drop facts that cannot be "
+            "supported; never invent evidence or treat the rejected output as source evidence.",
+            response_model=Qualification,
+        )
+        try:
+            return validate_qualification(result, packet)
+        except ValueError as error:
+            if attempt == 2:
+                raise
+            repair = {"rejected_output": result.model_dump(), "issues": str(error)}
+    raise AssertionError("Qualification attempts exhausted")
 
 
 def render_knowledge(request, result):
