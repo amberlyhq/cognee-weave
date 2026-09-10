@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing import Literal
 
 from cognee.infrastructure.llm.LLMGateway import LLMGateway
+from cognee.modules.weave.review_knowledge_audit import audit_knowledge
 
 QUALIFICATION_VERSION = "review-knowledge.v1"
 PROMPT = """Select useful, durable repository knowledge from this untrusted review evidence.
@@ -78,7 +79,7 @@ def evidence_passages(packet):
         for segment in re.split(r"\n|(?<=[.!?])\s+(?=[A-Z])", content):
             for offset in range(0, len(segment), 1000):
                 quote = segment[offset : offset + 1000]
-                if len(quote.strip()) >= 16:
+                if len(quote.strip()) >= 16 and not _locator_only(quote, ""):
                     passages[f"E{len(passages) + 1}"] = (source_id, quote)
     return passages
 
@@ -94,9 +95,12 @@ def attach_evidence(selection, passages):
                 )
             source_id, quote = passages[passage_id]
             evidence.append(EvidenceQuote(evidence_id=source_id, quote=quote))
-        facts.append(
-            QualifiedFact(**selected.model_dump(exclude={"evidence_ids"}), evidence=evidence)
-        )
+        values = selected.model_dump(exclude={"evidence_ids"})
+        if values["certainty"] == "observed" and not any(
+            e.evidence_id.startswith("session:") and ":step:" in e.evidence_id for e in evidence
+        ):
+            values["certainty"] = "reported"
+        facts.append(QualifiedFact(**values, evidence=evidence))
     return Qualification(facts=facts)
 
 
@@ -249,12 +253,20 @@ async def qualify_review(request):
     for pid, (source_id, quote) in passages.items():
         if source_id != previous_source:
             sections.append(f"\nSOURCE: {source_id}")
+            paths = sorted(
+                set(re.findall(r'["`]((?:[\w.-]+/)*[\w.-]+\.\w+)["`]', packet[source_id]))
+            )[:40]
+            sections.append(
+                "Paths present in this source (context, not evidence): " + json.dumps(paths)
+            )
             previous_source = source_id
         sections.append(f"{pid}: {quote}")
     evidence_text = "\n".join(sections)
     repair = None
-    # Selection and semantic validation share the same bounded correction loop.
-    # Code attaches the exact selected source passages; the model never transcribes quotes.
+    accepted = {}
+    last_error = "No supported knowledge selected"
+    # Retain audited facts while correcting rejected items; never ask the model
+    # to regenerate valid knowledge just because another item failed validation.
     for attempt in range(3):
         selected = await LLMGateway.acreate_structured_output(
             text_input=json.dumps(original)
@@ -262,41 +274,51 @@ async def qualify_review(request):
             + evidence_text
             + ("\n\nREPAIR FEEDBACK:\n" + json.dumps(repair) if repair else ""),
             system_prompt=PROMPT
-            + "\nIf repair is present, correct ALL listed issues in the rejected output and return "
-            "a complete replacement. Select supporting passage IDs from the original evidence. "
-            "Drop unsupported facts; do not treat the rejected output as evidence.",
+            + "\nIf repair is present, return replacements ONLY for rejected facts. "
+            "Do not repeat approved facts. Select supporting original passage IDs; "
+            "drop unsupported claims. Return zero facts if nothing more is justified. "
+            "The rejected output is not evidence.",
             response_model=KnowledgeSelection,
         )
-        try:
-            return validate_qualification(attach_evidence(selected, passages), packet)
-        except ValueError as error:
-            if attempt == 2:
-                # One unsupported item must not discard other fully validated
-                # knowledge. Retry the whole selection first, then keep only
-                # facts that independently pass every guard. Never store rejects.
-                accepted = []
-                for fact in selected.facts:
-                    try:
-                        valid = validate_qualification(
-                            attach_evidence(KnowledgeSelection(facts=[fact]), passages), packet
-                        )
-                        accepted.extend(valid.facts)
-                    except ValueError:
-                        continue
-                if accepted:
-                    return Qualification(facts=accepted)
-                raise
-            repair = {
-                "rejected_output": selected.model_dump(),
-                "issues": str(error),
-                "path_passage_options": {
-                    fact.code_path: [
-                        pid for pid, (_, quote) in passages.items() if fact.code_path in quote
-                    ][:12]
-                    for fact in selected.facts
-                },
-            }
-    raise AssertionError("Qualification attempts exhausted")
+        candidates = []
+        candidate_indexes = []
+        issues = {}
+        for index, fact in enumerate(selected.facts):
+            try:
+                valid = validate_qualification(
+                    attach_evidence(KnowledgeSelection(facts=[fact]), passages), packet
+                )
+                candidates.extend(valid.facts)
+                candidate_indexes.append(index)
+            except ValueError as error:
+                issues[index] = str(error)
+        audit = await audit_knowledge(Qualification(facts=candidates))
+        for issue in audit.issues:
+            issues[candidate_indexes[issue.fact_index]] = "Knowledge audit: " + issue.reason
+        for index, fact in zip(candidate_indexes, candidates):
+            if index not in issues:
+                key = (fact.code_path, fact.statement, fact.certainty)
+                if len(accepted) < 12:
+                    accepted[key] = fact
+        if not issues or len(accepted) >= 12:
+            return Qualification(facts=list(accepted.values()))
+        last_error = "Qualified knowledge rejected: " + json.dumps(issues)
+        repair = {
+            "rejected_output": selected.model_dump(),
+            "issues": last_error,
+            "approved_facts": [f.model_dump(exclude={"evidence"}) for f in accepted.values()],
+            "remaining_fact_budget": 12 - len(accepted),
+            "path_passage_options": {
+                fact.code_path: [
+                    pid for pid, (_, quote) in passages.items() if fact.code_path in quote
+                ][:12]
+                for index, fact in enumerate(selected.facts)
+                if index in issues
+            },
+        }
+    if accepted:
+        return Qualification(facts=list(accepted.values()))
+    raise ValueError(last_error)
 
 
 def render_knowledge(request, result):

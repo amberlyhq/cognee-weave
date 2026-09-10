@@ -51,6 +51,17 @@ async def test_qualified_review_uses_native_memory_and_replays_without_model_cal
         async def model(*args, **kwargs):
             cls = kwargs.get("response_model") or args[2]
             calls.append(cls.__name__)
+            if cls.__name__ == "KnowledgeAudit":
+                return cls(
+                    issues=[
+                        dict(
+                            fact_index=0,
+                            reason="The claim that it never returns a message is not supported.",
+                        )
+                    ]
+                    if calls.count("KnowledgeAudit") == 1
+                    else []
+                )
             if cls.__name__ == "KnowledgeSelection":
                 if calls.count("KnowledgeSelection") == 1:
                     return cls(
@@ -59,11 +70,11 @@ async def test_qualified_review_uses_native_memory_and_replays_without_model_cal
                                 statement="MessagePayment never returns any message.",
                                 code_path="main.go",
                                 certainty="reported",
-                                evidence_ids=["invented"],
+                                evidence_ids=["E1"],
                             )
                         ]
                     )
-                assert "unknown passage" in kwargs["text_input"]
+                assert "not supported" in kwargs["text_input"]
                 return cls(
                     facts=[
                         dict(
