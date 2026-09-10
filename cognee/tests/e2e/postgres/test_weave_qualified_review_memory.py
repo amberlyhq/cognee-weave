@@ -51,36 +51,26 @@ async def test_qualified_review_uses_native_memory_and_replays_without_model_cal
         async def model(*args, **kwargs):
             cls = kwargs.get("response_model") or args[2]
             calls.append(cls.__name__)
-            if cls.__name__ == "Qualification":
-                if calls.count("Qualification") == 1:
+            if cls.__name__ == "KnowledgeSelection":
+                if calls.count("KnowledgeSelection") == 1:
                     return cls(
                         facts=[
                             dict(
                                 statement="MessagePayment never returns any message.",
                                 code_path="main.go",
                                 certainty="reported",
-                                evidence=[
-                                    dict(
-                                        evidence_id="final",
-                                        quote="main.go MessagePayment NEVER returns a payment message.",
-                                    )
-                                ],
+                                evidence_ids=["invented"],
                             )
                         ]
                     )
-                assert "absent evidence" in kwargs["text_input"]
+                assert "unknown passage" in kwargs["text_input"]
                 return cls(
                     facts=[
                         dict(
                             statement="MessagePayment returns a payment message.",
                             code_path="main.go",
                             certainty="reported",
-                            evidence=[
-                                dict(
-                                    evidence_id="final",
-                                    quote="main.go MessagePayment returns a payment message.",
-                                )
-                            ],
+                            evidence_ids=["E1"],
                         )
                     ]
                 )
@@ -145,7 +135,7 @@ async def test_qualified_review_uses_native_memory_and_replays_without_model_cal
         before = list(calls)
         assert (await remember_review(binding.organization_id, req)).status == "unchanged"
         assert calls == before
-        assert calls.count("Qualification") == 2
+        assert calls.count("KnowledgeSelection") == 2
         assert (
             await remember_review(
                 binding.organization_id, req.model_copy(update={"artifact_revision": 0})
@@ -155,7 +145,7 @@ async def test_qualified_review_uses_native_memory_and_replays_without_model_cal
         # New artifact can qualify to nothing; native data is removed and the
         # empty receipt prevents charging for repeated no-knowledge deliveries.
         async def empty(**kwargs):
-            assert kwargs["response_model"].__name__ == "Qualification"
+            assert kwargs["response_model"].__name__ == "KnowledgeSelection"
             calls.append("empty")
             return kwargs["response_model"](facts=[])
 
