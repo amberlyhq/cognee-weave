@@ -86,37 +86,6 @@ def test_shared_memory_requires_all_repository_receipts_even_when_primary_is_rea
     assert not snapshots_ready([ready, pending])
 
 
-@pytest.mark.asyncio
-async def test_native_repo_sources_keep_manifest_granularity_and_stable_fingerprints(
-    tmp_path, monkeypatch
-):
-    from cognee.modules.weave.repository_sources import prepare_repository_sources
-
-    monkeypatch.setenv("LLM_API_KEY", "offline-key")
-    monkeypatch.setattr(
-        "cognee.infrastructure.llm.config.get_llm_config",
-        lambda: SimpleNamespace(llm_api_key="offline-key"),
-    )
-    request = SimpleNamespace(
-        repository_owner="amberlyhq", repository_name="api", github_repository_id=123
-    )
-    fingerprints = []
-    for folder in ("archive-a", "archive-b"):
-        repo = tmp_path / folder / "sha-dependent-root"
-        repo.mkdir(parents=True)
-        (repo / "package.json").write_text('{"name":"api"}')
-        (repo / "index.js").write_text("export function customer() { return 1; }")
-        (repo / "README.md").write_text("Customer API documentation.")
-        (repo / ".env").write_text("DO_NOT_INGEST=secret")
-        sources = await prepare_repository_sources(repo, request, user=None, dataset_id=uuid4())
-        assert len(sources) == 2
-        assert sources[0][0] == "code"
-        assert sources[0][1].system_metadata["source"] == "code_repo"
-        assert sources[1][1].external_metadata["source_path"] == "README.md"
-        fingerprints.append([(key, fingerprint) for key, _, fingerprint in sources])
-    assert fingerprints[0] == fingerprints[1]
-
-
 def test_shared_recall_can_disclose_more_than_twenty_repository_receipts():
     from cognee.modules.weave.contracts import RecallResponse, RepositoryReference
 

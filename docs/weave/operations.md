@@ -3,7 +3,8 @@
 Cognee Weave is one private Railway service plus one PostgreSQL service with
 the `vector` extension. Neo4j is not deployed. Postgres stores the relational
 control plane, graph rows, and vectors. Each organization retains its primary
-binding and one native memory dataset/schema shared by its repositories.
+binding and primary review-memory dataset/schema. Each repository has a separate
+native dataset/schema owned by the same organization.
 
 ## Native image loading
 
@@ -111,25 +112,43 @@ individual source deletion uses `cognee.forget()`. Weave no longer supplies cust
 graph models, or its own recall ranking. These public operation implementations
 and the upstream memory layer are unchanged by this alignment.
 
-The boundary still supplies tenant identity, repository selection, model
-credentials and exact-SHA receipts. It adds no operation deadline around native
-Cognee calls; upstream timeouts remain unchanged. All repositories resolve to
-the customer's bound primary dataset. Recall refuses legacy, failed, running,
-missing or stale snapshots and incomplete source receipts. Replacement takes
-the existing customer operation lock and uses stable native source IDs. Cognee's
-directory resolver produces one code manifest per project plus supported docs;
-only changed items are updated. This is not per-symbol incremental indexing.
+The boundary supplies tenant identity, model credentials, archive validation and
+exact-SHA receipts. Pipeline `weave-native-memory.v3` restores one
+`cognee.remember(repository_directory)` call per repository, with native loaders,
+batching, chunking and improvement defaults. There is no Weave per-file indexing
+loop, custom extraction prompt, extra model-call deadline or concurrency override.
 
-### Source and completed-review lifecycle (2026-09-06)
+Each repository has an owned native dataset. On a changed commit or failed rebuild,
+Weave uses native `forget(dataset_id=...)` for that repository, then rebuilds it.
+This intentionally trades per-file incremental recovery for the original native
+repository path. Removed files cannot survive a successful replacement, and A -> B
+-> A rebuilds the requested contents. Duplicate successful deliveries remain no-ops.
+Full rebuilds may still be expensive; this change does not fix upstream model output
+limits or retries and makes no latency guarantee.
 
-Apply migrations through `f2c4e6a8b0d1` before the service starts. Migration
-`d9a1c3e5f7b0` adds forced-tenant-RLS source receipts; `e1b3d5f7a9c0` adds review
-revision ordering; `f2c4e6a8b0d1` adds repository/customer cleanup-pending flags.
-These are integration records, not custom graph ownership.
-Reindex every customer repository to `weave-native-memory.v2`. Indexing does not
-wipe the customer dataset or siblings. Legacy per-repository datasets are retained
-during migration and excluded from recall; explicit repository removal also
-forgets that repository's legacy dataset.
+Local V3 verification covers native directory ingestion, failed native receipts,
+A -> B -> A, 45 concurrent lock waiters, tenant isolation, and preservation of
+sibling/review graph facts during migration. The locked focused suite passed
+347 tests (13 skipped); the PostgreSQL suite passed 18. The packaged parity flow
+passed native fixture indexing, vector storage, lifecycle isolation, and full
+backup/restore. These offline fixtures do not establish full-repository runtime
+or native cross-dataset answer quality in staging.
+
+### Source and completed-review lifecycle
+
+Apply migrations through `f2c4e6a8b0d1` before the service starts. Existing source
+receipts remain for historical reviews and cleanup of V2 data, not repository
+scheduling. Reindex all customer repositories to V3 before recall becomes available.
+During replacement, native `forget(data_id=...)` removes only that repository's old
+V2 source records; review records and sibling repositories are preserved. Historical
+reviews stay in the customer's primary dataset. Native recall searches the owned
+repository datasets plus the review dataset, with every repository/SHA disclosed.
+The graph is no longer a single shared repository graph; cross-dataset retrieval
+is delegated to native Cognee and must be validated for useful answers.
+
+Organization locking still prevents index/delete/read races. Busy callers release
+the database connection before waiting; optional recall and review ingestion decline
+busy locks immediately. Amberly's existing durable review workflow retries later.
 
 Deletion marks cleanup pending before removing native data. Failed cleanup keeps
 reads and reactivation blocked until deletion is retried successfully. Customer
@@ -289,7 +308,7 @@ bootstraps its fresh database with `cognee-cli upgrade head` before storage test
 and the Python gate also runs migration/bootstrap regressions.
 
 The native export/restore gate checks repository identity and SHA in `repositories`,
-and checks the customer dataset and graph in `native_graph`. It compares the complete
+and checks the owned repository and review datasets in `native_graph`. It compares the complete
 restored export after normalizing ordering and the nested graph JSON. Regression
 cases reject foreign organizations/repositories, stale SHAs, missing graphs, changed
 dataset IDs, and changed content. Equivalent JSON formatting is accepted.

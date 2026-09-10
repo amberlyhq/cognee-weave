@@ -25,7 +25,13 @@ def _export():
                     "scope": "customer",
                     "nodes": [["node", {"name": "BetaCanary"}]],
                     "edges": [["node", "node", "references", {}]],
-                }
+                },
+                {
+                    "dataset_id": "07432929-98df-4e54-95d1-7d8d4e1305be",
+                    "scope": "customer",
+                    "nodes": [],
+                    "edges": [],
+                },
             ]
         ),
     }

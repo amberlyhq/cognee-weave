@@ -29,7 +29,9 @@ def repository_accepts_review(lifecycle, generation):
 
 
 async def remember_review(organization_id, request):
-    async with weave_operation_lock(organization_id):
+    async with weave_operation_lock(organization_id, wait=False) as acquired:
+        if not acquired:
+            raise LookupError("Customer source indexing is busy")
         binding = await get_organization_binding(organization_id)
         if binding is None:
             raise LookupError("Customer is not ready")
