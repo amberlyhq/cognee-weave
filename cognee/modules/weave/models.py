@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from sqlalchemy import (
     UUID,
+    JSON,
     BigInteger,
     Boolean,
     Column,
@@ -87,6 +88,7 @@ class WeaveMemorySource(Base):
     data_id = Column(UUID, nullable=False, unique=True)
     dataset_id = Column(UUID, nullable=True)
     session_id = Column(String(255), nullable=True)
+    qualification = Column(JSON, nullable=True)
     content_hash = Column(String(64), nullable=False)
     artifact_revision = Column(BigInteger, nullable=True)
     status = Column(String(32), nullable=False)
