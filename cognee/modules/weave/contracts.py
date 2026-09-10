@@ -1,7 +1,7 @@
 from typing import Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 RecallMode = Literal["repository_context", "symbol_context", "impact_context"]
 RecallStatus = Literal["available", "stale", "unavailable", "timed_out"]
@@ -110,6 +110,33 @@ class SurfaceResponse(BaseModel):
     native_graph: str | None = Field(default=None, max_length=1000000)
 
 
+class ReviewSessionStep(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(min_length=1, max_length=255)
+    type: Literal["agent.message", "agent.thinking", "tool.requested", "tool.completed"]
+    content: str = Field(max_length=64000)
+    tool_name: str | None = Field(default=None, alias="toolName", max_length=255)
+
+
+class ReviewSession(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    invocation_id: UUID = Field(alias="invocationId")
+    session_id: UUID = Field(alias="sessionId")
+    thread_id: UUID = Field(alias="threadId")
+    role: str = Field(min_length=1, max_length=100)
+    result: str = Field(min_length=1, max_length=24000)
+    steps: list[ReviewSessionStep] = Field(default_factory=list, max_length=200)
+    truncated: bool = False
+
+    @model_validator(mode="after")
+    def bounded_session(self):
+        if len(self.result) + sum(len(step.content) for step in self.steps) > 64000:
+            raise ValueError("Review session exceeds 64000 characters")
+        if len({step.id for step in self.steps}) != len(self.steps):
+            raise ValueError("Duplicate review trace IDs")
+        return self
+
+
 class ReviewMemoryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -119,6 +146,13 @@ class ReviewMemoryRequest(BaseModel):
     lifecycle_generation: int = Field(gt=0, le=2**63 - 1)
     artifact_revision: int = Field(ge=0, le=2**53 - 1)
     content: str = Field(min_length=1, max_length=500000)
+    sessions: list[ReviewSession] = Field(default_factory=list, max_length=32)
+
+    @model_validator(mode="after")
+    def unique_sessions(self):
+        if len({entry.invocation_id for entry in self.sessions}) != len(self.sessions):
+            raise ValueError("Duplicate reviewer invocation IDs")
+        return self
 
 
 class ReviewMemoryResponse(BaseModel):

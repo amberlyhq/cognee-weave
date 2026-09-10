@@ -12,6 +12,8 @@ work, never the whole run.
 """
 
 import asyncio
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Optional, Union
@@ -52,6 +54,22 @@ from .models import (
 )
 
 logger = get_logger("session_distillation")
+_strict_errors = ContextVar("session_distillation_strict_errors", default=False)
+
+
+@contextmanager
+def strict_distillation():
+    """Let durable callers retry infrastructure failures instead of losing lessons.
+
+    Extraction, prompts, rejection decisions, and the model adapter are unchanged.
+    Context-local opt-in preserves best-effort behavior for existing callers.
+    """
+    token = _strict_errors.set(True)
+    try:
+        yield
+    finally:
+        _strict_errors.reset(token)
+
 
 CURATOR_PROMPT_FILE = "session_distillation_curator_system.txt"
 WRITER_PROMPT_FILE = "session_distillation_writer_system.txt"
@@ -179,6 +197,8 @@ async def curate_batch(batch_text: str) -> List[ProposedLesson]:
     """One curator call over one batch slice. Fail-open -> []."""
     system_prompt = read_query_prompt(CURATOR_PROMPT_FILE)
     if not system_prompt:
+        if _strict_errors.get():
+            raise RuntimeError("Native distillation prompt is missing")
         logger.warning("Distillation curator prompt not found: %s", CURATOR_PROMPT_FILE)
         return []
     try:
@@ -189,6 +209,8 @@ async def curate_batch(batch_text: str) -> List[ProposedLesson]:
         )
         return list(result.lessons)
     except Exception as error:
+        if _strict_errors.get():
+            raise
         logger.warning("Distillation curator batch failed open: %s", error)
         return []
 
@@ -229,6 +251,10 @@ async def search_payload_texts(
             node_name=node_name,
         )
     except Exception as error:
+        from cognee.infrastructure.databases.vector.exceptions import CollectionNotFoundError
+
+        if _strict_errors.get() and not isinstance(error, CollectionNotFoundError):
+            raise
         logger.debug("Distillation search on %s failed open: %s", collection, error)
         return []
 
@@ -278,6 +304,8 @@ async def write_or_reject(
     """One writer/rejecter call for one proposed lesson. Fail-open -> None."""
     system_prompt = read_query_prompt(WRITER_PROMPT_FILE)
     if not system_prompt:
+        if _strict_errors.get():
+            raise RuntimeError("Native distillation prompt is missing")
         logger.warning("Distillation writer prompt not found: %s", WRITER_PROMPT_FILE)
         return None
 
@@ -289,6 +317,8 @@ async def write_or_reject(
             response_model=WrittenLesson,
         )
     except Exception as error:
+        if _strict_errors.get():
+            raise
         logger.warning("Distillation writer call failed open: %s", error)
         return None
 
@@ -379,7 +409,11 @@ async def publish_distilled_lessons(
 
     node_set = [*DISTILLATE_NODE_SET, truth_session_node_set(scope.session_id)]
     await add(documents, dataset_id=scope.dataset.id, user=scope.user, node_set=node_set)
-    await cognify(datasets=[scope.dataset.id], user=scope.user)
+    result = await cognify(datasets=[scope.dataset.id], user=scope.user)
+    if _strict_errors.get():
+        from cognee.modules.weave.memory_sources import assert_native_completed
+
+        assert_native_completed(result)
     return documents
 
 

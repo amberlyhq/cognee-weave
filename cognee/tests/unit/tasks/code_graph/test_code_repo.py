@@ -85,7 +85,10 @@ def test_manifest_hash_tracks_code_content(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_directory_with_project_resolves_to_repo_item_plus_documents(tmp_path):
+async def test_directory_with_project_resolves_to_repo_item_plus_documents(tmp_path, monkeypatch):
+    from cognee.infrastructure.llm.config import get_llm_config
+
+    monkeypatch.setattr(get_llm_config(), "llm_api_key", "offline-test-placeholder")
     from cognee.tasks.ingestion.data_item import DataItem
     from cognee.tasks.ingestion.resolve_data_directories import resolve_data_directories
 

@@ -78,6 +78,7 @@ async def sync_source(
     embedding,
     artifact_revision=None,
     improve_after_update=False,
+    self_improvement=True,
 ):
     import cognee
 
@@ -129,9 +130,10 @@ async def sync_source(
             user=user,
             llm_config=llm,
             embedding_config=embedding,
+            self_improvement=self_improvement,
         )
     assert_native_completed(result)
-    if action == "update" and (improve_after_update or retry_improvement):
+    if action == "update" and (improve_after_update or (retry_improvement and self_improvement)):
         assert_native_completed(await cognee.improve(dataset=binding.dataset_id, user=user))
     async with get_relational_engine().get_async_session() as session:
         await set_weave_organization_scope(session, binding.organization_id)
@@ -154,7 +156,14 @@ async def forget_source(binding, user, record):
             return
         current.status = "deleting"
         await session.commit()
-    await cognee.forget(data_id=record.data_id, dataset_id=binding.dataset_id, user=user)
+    if record.session_id:
+        from cognee.infrastructure.session.get_session_manager import get_session_manager
+        manager = get_session_manager(dataset_id=record.dataset_id)
+        if not manager.is_available:
+            raise RuntimeError("Native session cache is unavailable during deletion")
+        await manager.delete_session(user_id=str(user.id), session_id=record.session_id)
+    else:
+        await cognee.forget(data_id=record.data_id, dataset_id=binding.dataset_id, user=user)
     async with get_relational_engine().get_async_session() as session:
         await set_weave_organization_scope(session, binding.organization_id)
         current = await session.get(WeaveMemorySource, identity)

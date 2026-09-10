@@ -50,3 +50,34 @@ def test_review_never_reactivates_a_deleted_or_replaced_repository():
     assert not repository_accepts_review(
         SimpleNamespace(active=True, lifecycle_generation=12, deletion_pending=True), 12
     )
+
+
+def test_review_accepts_bounded_completed_sessions_without_dataset_selectors():
+    from cognee.modules.weave.contracts import ReviewMemoryRequest
+
+    session = dict(
+        invocationId=str(uuid4()),
+        sessionId=str(uuid4()),
+        threadId=str(uuid4()),
+        role="security",
+        result="payment retry finding",
+        truncated=False,
+        steps=[dict(id=str(uuid4()), type="tool.completed", content="payment code")],
+    )
+    data = dict(
+        github_repository_id=1,
+        review_id=str(uuid4()),
+        head_sha="a" * 40,
+        lifecycle_generation=1,
+        artifact_revision=0,
+        content="Final review",
+        sessions=[session],
+    )
+    parsed = ReviewMemoryRequest(**data)
+    assert len(parsed.sessions) == 1
+    for changed in (
+        dict(dataset_id=str(uuid4())),
+        dict(steps=[dict(id="x", type="tool.completed", content="x" * 64001)]),
+    ):
+        with pytest.raises(ValidationError):
+            ReviewMemoryRequest(**(data | {"sessions": [session | changed]}))

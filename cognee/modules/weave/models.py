@@ -85,6 +85,8 @@ class WeaveMemorySource(Base):
     github_repository_id = Column(BigInteger, primary_key=True)
     source_key = Column(String(1024), primary_key=True)
     data_id = Column(UUID, nullable=False, unique=True)
+    dataset_id = Column(UUID, nullable=True)
+    session_id = Column(String(255), nullable=True)
     content_hash = Column(String(64), nullable=False)
     artifact_revision = Column(BigInteger, nullable=True)
     status = Column(String(32), nullable=False)

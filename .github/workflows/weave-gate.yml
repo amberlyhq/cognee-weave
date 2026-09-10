@@ -40,6 +40,8 @@ jobs:
           cognee/tests/unit/infrastructure/databases/graph/test_postgres_adapter.py
           cognee/tests/unit/infrastructure/databases/vector
           cognee/tests/unit/modules/weave
+          cognee/tests/unit/modules/session_distillation
+          cognee/tests/unit/tasks/code_graph
           cognee/tests/unit/modules/migrations
           cognee/tests/unit/test_run_migrations.py
           cognee/tests/unit/api/v1/weave/test_internal_auth.py
@@ -90,6 +92,8 @@ jobs:
       GRAPH_DATABASE_PASSWORD: cognee
       GRAPH_DATABASE_NAME: cognee_db
       COGNEE_SKIP_CONNECTION_TEST: "true"
+      CACHE_BACKEND: postgres
+      SESSION_TTL_SECONDS: "0"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
@@ -110,6 +114,7 @@ jobs:
           cognee/tests/e2e/postgres/test_tenant_graph_retrieval.py
           cognee/tests/e2e/postgres/test_weave_lock_wait.py
           cognee/tests/e2e/postgres/test_weave_native_storage.py
+          cognee/tests/e2e/postgres/test_weave_gradual_review_memory.py
           cognee/tests/e2e/postgres/test_pgvector_hnsw_plan.py
           cognee/tests/e2e/postgres/test_weave_exact_sha_indexing.py
           cognee/tests/e2e/postgres/test_weave_hybrid_recall.py

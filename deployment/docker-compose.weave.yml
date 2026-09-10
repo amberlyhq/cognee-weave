@@ -59,6 +59,10 @@ services:
       ENV: prod
       HTTP_PORT: "8000"
       WEAVE_STRICT_MODE: "true"
+      CACHE_BACKEND: postgres
+      CACHING: "true"
+      AUTO_FEEDBACK: "true"
+      SESSION_TTL_SECONDS: "0"
       ENABLE_AUTO_MIGRATIONS: "false"
       WEAVE_INTERNAL_TOKEN: ${WEAVE_INTERNAL_TOKEN:?WEAVE_INTERNAL_TOKEN is required}
       ENABLE_BACKEND_ACCESS_CONTROL: "true"

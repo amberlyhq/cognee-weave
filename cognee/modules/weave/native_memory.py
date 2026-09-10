@@ -15,7 +15,7 @@ from cognee.modules.users.methods import get_user
 from cognee.modules.weave.config import get_weave_embedding_config, get_weave_llm_config
 from cognee.modules.weave.scope import native_organization
 
-NATIVE_PIPELINE_VERSION = "weave-native-memory.v3"
+NATIVE_PIPELINE_VERSION = "weave-native-memory.v4"
 
 
 async def customer_dataset(binding):
@@ -50,16 +50,23 @@ async def customer_snapshots(organization_id):
 def repository_dataset_name(organization_id: UUID, repository_id: int) -> str:
     if repository_id <= 0:
         raise ValueError("Repository ID must be positive")
-    return f"weave-memory-{organization_id.hex}-{repository_id}"
+    return f"weave-memory-{organization_id.hex}-{repository_id}-code-v1"
 
 
-async def repository_dataset(binding, repository_id: int):
+async def repository_dataset(binding, repository_id: int, *, legacy: bool = False):
     """Resolve by trusted identity, never a caller-supplied dataset UUID."""
     engine = get_relational_engine()
     async with engine.get_async_session() as session:
         return await session.scalar(
             select(Dataset).where(
-                Dataset.name == repository_dataset_name(binding.organization_id, repository_id),
+                Dataset.name
+                == (
+                    repository_dataset_name(binding.organization_id, repository_id).removesuffix(
+                        "-code-v1"
+                    )
+                    if legacy
+                    else repository_dataset_name(binding.organization_id, repository_id)
+                ),
                 Dataset.owner_id == binding.service_user_id,
                 Dataset.tenant_id == binding.tenant_id,
             )
@@ -77,11 +84,10 @@ async def forget_repository(binding, repository_id: int, *, preserve_reviews: bo
             await forget_source(binding, user, record)
     # Remove the dedicated native dataset for this repository, including an
     # interrupted build or a dataset created by the original directory pipeline.
-    dataset = await repository_dataset(binding, repository_id)
-    if dataset is None:
-        return
-    user = await get_user(binding.service_user_id)
-    await _forget_dataset(binding, dataset, user)
+    for legacy in (False, True):
+        dataset = await repository_dataset(binding, repository_id, legacy=legacy)
+        if dataset is not None:
+            await _forget_dataset(binding, dataset, user)
 
 
 async def _forget_dataset(binding, dataset, user):
@@ -125,28 +131,32 @@ async def remember_repository(binding, request, repository):
     from cognee.modules.weave.memory_sources import assert_native_completed
     from cognee.modules.weave.repository_sources import prepare_repository_directory
 
-    # A repository is one native directory ingestion. Rebuild its dedicated
-    # dataset so removed files and A -> B -> A cannot leave stale source memory.
-    # Review memory lives separately and survives repository replacement.
-    embedding = get_weave_embedding_config()
-    llm = get_weave_llm_config()
+    # The native code pipeline updates facts/edges and sweeps removed code.
+    # Its snapshot identity handles repeats and A -> B -> A without deleting
+    # the dataset or the review lessons stored alongside the code.
     user = await get_user(binding.service_user_id)
-    await forget_repository(binding, request.github_repository_id, preserve_reviews=True)
     dataset = await create_authorized_dataset(
         repository_dataset_name(binding.organization_id, request.github_repository_id), user
     )
+    from cognee.modules.weave.memory_sources import source_records, forget_source
+
+    # Retire source receipts from the older per-file loader, preserving reviews.
+    async with scoped_database_context_variables(binding.dataset_id, user.id):
+        for source in await source_records(binding, request.github_repository_id):
+            if not source.source_key.startswith("review:"):
+                await forget_source(binding, user, source)
     repository = prepare_repository_directory(repository, request)
     token = native_organization.set(binding.organization_id)
     try:
-        async with scoped_database_context_variables(
-            dataset.id, user.id, llm_config=llm, embedding_config=embedding
-        ):
+        async with scoped_database_context_variables(dataset.id, user.id):
             result = await cognee.remember(
                 str(repository),
                 dataset_id=dataset.id,
                 user=user,
-                llm_config=llm,
-                embedding_config=embedding,
+                content_type="code",
+                index_vectors=False,
+                self_improvement=False,
+                run_in_background=False,
             )
             assert_native_completed(result)
             return result
@@ -161,7 +171,7 @@ async def memory_datasets(binding, records):
     sources = await source_records(binding)
     # A partially migrated V2 source must never leak stale repository content
     # into the review dataset used by native cross-repository recall.
-    if any(s.status != "completed" or not s.source_key.startswith("review:") for s in sources):
+    if any(not s.source_key.startswith("review:") for s in sources):
         return []
     datasets = [await repository_dataset(binding, r.github_repository_id) for r in records]
     reviews = await customer_dataset(binding)
@@ -182,7 +192,7 @@ def snapshots_ready(records) -> bool:
 
 async def recall_repository_memory(organization_id, request):
     import cognee
-    from cognee.modules.weave.contracts import RecallResponse
+    from cognee.modules.weave.contracts import RecallResponse, RecallDiagnostic
     from cognee.modules.weave.indexing import weave_operation_lock
     from cognee.modules.weave.organizations import get_organization_binding
     from cognee.modules.weave.recall import _repository_reference, _unavailable
@@ -212,19 +222,62 @@ async def recall_repository_memory(organization_id, request):
         if not datasets:
             return _unavailable(organization_id, request, "unavailable", "no_indexed_repository")
         user = await get_user(binding.service_user_id)
-        embedding = get_weave_embedding_config()
-        llm = get_weave_llm_config()
-        async with scoped_database_context_variables(
-            datasets[0].id, user.id, llm_config=llm, embedding_config=embedding
-        ):
+        code_datasets = datasets[:-1]
+        # Code navigation works immediately and never invokes an LLM or embeddings.
+        code_query = {"operation": "query_facts", "limit": request.top_k}
+        if request.mode == "impact_context":
+            code_query = {
+                "operation": "impact_analysis",
+                "names": request.seeds or [request.query],
+                "max_depth": request.depth,
+                "max_nodes": request.top_k,
+            }
+        elif request.seeds:
+            code_query["names"] = request.seeds
+        elif request.mode != "repository_context":
+            code_query["name"] = request.query
+        async with scoped_database_context_variables(code_datasets[0].id, user.id):
             result = await cognee.recall(
                 request.query,
-                dataset_ids=[dataset.id for dataset in datasets],
+                scope="code",
+                code_query=code_query,
+                dataset_ids=[dataset.id for dataset in code_datasets],
                 user=user,
                 top_k=request.top_k,
-                llm_config=llm,
-                embedding_config=embedding,
             )
+        # Partial review learning must not hide usable code or expose partial memory.
+        from cognee.modules.weave.memory_sources import source_records
+
+        sources = await source_records(binding)
+        completed = {
+            source.dataset_id or binding.dataset_id
+            for source in sources
+            if source.status == "completed"
+        }
+        pending = {
+            source.dataset_id or binding.dataset_id
+            for source in sources
+            if source.status != "completed"
+        }
+        semantic = [dataset.id for dataset in datasets if dataset.id in completed - pending]
+        diagnostics = []
+        if semantic:
+            try:
+                embedding, llm = get_weave_embedding_config(), get_weave_llm_config()
+                async with scoped_database_context_variables(
+                    semantic[0], user.id, llm_config=llm, embedding_config=embedding
+                ):
+                    result += await cognee.recall(
+                        request.query,
+                        dataset_ids=semantic,
+                        user=user,
+                        top_k=request.top_k,
+                        llm_config=llm,
+                        embedding_config=embedding,
+                    )
+            except Exception:
+                # Advisory paid memory must not discard successful code navigation.
+                diagnostics.append(RecallDiagnostic(code="backend_unavailable"))
         # Preserve native output: these are NOT source-verified symbol candidates.
         memory = json.dumps(
             [
@@ -244,4 +297,5 @@ async def recall_repository_memory(organization_id, request):
             indexed_default_sha=next(iter(shas)) if len(shas) == 1 else None,
             repositories=references,
             native_memory=memory,
+            diagnostics=diagnostics,
         )
