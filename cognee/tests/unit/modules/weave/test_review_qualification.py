@@ -99,3 +99,52 @@ async def test_native_gateway_gets_qualification_instructions_and_only_selected_
     assert req.head_sha in rendered
     assert "reported" in rendered
     assert "payments/retry.ts" in rendered
+
+
+@pytest.mark.asyncio
+async def test_invalid_quote_gets_feedback_then_corrected_without_ingesting_rejected_claim(
+    monkeypatch,
+):
+    from cognee.modules.weave.review_qualification import Qualification, qualify_review
+    from cognee.infrastructure.llm.LLMGateway import LLMGateway
+
+    calls = []
+
+    async def model(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return Qualification(
+                facts=[
+                    fact(
+                        evidence=[
+                            dict(evidence_id="final", quote="payments/retry.ts NEVER retries")
+                        ]
+                    )
+                ]
+            )
+        assert "absent evidence" in kwargs["text_input"]
+        assert "NEVER retries" in kwargs["text_input"]
+        assert "reuses the payment id" in kwargs["text_input"]
+        return Qualification(facts=[fact()])
+
+    monkeypatch.setattr(LLMGateway, "acreate_structured_output", model)
+    result = await qualify_review(request())
+    assert len(calls) == 2
+    assert result.facts[0].statement == fact()["statement"]
+
+
+@pytest.mark.asyncio
+async def test_invalid_qualification_exhausts_bounded_feedback_attempts(monkeypatch):
+    from cognee.modules.weave.review_qualification import Qualification, qualify_review
+    from cognee.infrastructure.llm.LLMGateway import LLMGateway
+
+    calls = []
+
+    async def model(**kwargs):
+        calls.append(kwargs)
+        return Qualification(facts=[fact(code_path="invented.ts")])
+
+    monkeypatch.setattr(LLMGateway, "acreate_structured_output", model)
+    with pytest.raises(ValueError, match="code path"):
+        await qualify_review(request())
+    assert len(calls) == 3
