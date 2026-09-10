@@ -59,7 +59,12 @@ async def test_repository_uses_one_native_directory_operation(tmp_path, monkeypa
         assert (directory / "index.js").exists()
         assert (directory / "README.md").exists()
         assert kwargs == dict(
-            dataset_id=dataset.id, user=user, llm_config="llm", embedding_config="embedding"
+            dataset_id=dataset.id,
+            user=user,
+            content_type="code",
+            index_vectors=False,
+            self_improvement=False,
+            run_in_background=False,
         )
         calls.append("remember")
         return SimpleNamespace(status=status)
@@ -81,4 +86,4 @@ async def test_repository_uses_one_native_directory_operation(tmp_path, monkeypa
             await native_memory.remember_repository(binding, request, repository)
     else:
         await native_memory.remember_repository(binding, request, repository)
-    assert calls == ["forget", "remember"]
+    assert calls == ["remember"]

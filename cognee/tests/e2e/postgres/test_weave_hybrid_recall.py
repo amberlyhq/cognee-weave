@@ -78,7 +78,6 @@ async def test_native_recall_routes_customer_datasets_but_never_organizations(
     assert not response_a.graph_candidates and not response_a.vector_candidates
     assert response_a.native_memory
     a_ids = {
-        binding_a.dataset_id,
         (await repository_dataset(binding_a, 930001)).id,
         (await repository_dataset(binding_a, 930002)).id,
     }
@@ -89,7 +88,7 @@ async def test_native_recall_routes_customer_datasets_but_never_organizations(
     assert response_b.status == "available"
     assert {item.github_repository_id for item in response_b.repositories} == {930003}
     assert offline_native_recall[1] == (
-        [(await repository_dataset(binding_b, 930003)).id, b_id],
+        [(await repository_dataset(binding_b, 930003)).id],
         binding_b.service_user_id,
     )
 

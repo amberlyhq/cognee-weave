@@ -16,6 +16,12 @@ echo "HTTP port: $HTTP_PORT"
 echo "Bind address: $BIND_ADDRESS"
 
 if [ "${WEAVE_STRICT_MODE:-false}" = "true" ]; then
+    # Native sessions survive service restarts and retry delays in the same
+    # Postgres database. No extra cache service or model is required.
+    export CACHE_BACKEND=postgres
+    export CACHING=true
+    export AUTO_FEEDBACK=true
+    export SESSION_TTL_SECONDS=0
     echo "Validating strict Cognee Weave runtime..."
     python - <<'PYTHON'
 from cognee.modules.weave.config import validate_weave_runtime_environment

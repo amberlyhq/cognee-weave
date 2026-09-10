@@ -10,7 +10,12 @@ from cognee.modules.weave.contracts import ReviewMemoryResponse
 from cognee.modules.weave.indexing import weave_operation_lock
 from cognee.modules.weave.memory_sources import sync_source
 from cognee.modules.weave.models import WeaveRepositoryLifecycle
-from cognee.modules.weave.native_memory import customer_dataset, customer_snapshots, snapshots_ready
+from cognee.modules.weave.native_memory import (
+    customer_dataset,
+    customer_snapshots,
+    snapshots_ready,
+    repository_dataset,
+)
 from cognee.modules.weave.organizations import (
     get_organization_binding,
     set_weave_organization_scope,
@@ -88,8 +93,19 @@ async def remember_review(organization_id, request):
                     llm=llm,
                     embedding=embedding,
                     artifact_revision=request.artifact_revision,
-                    improve_after_update=True,
+                    improve_after_update=False,
+                    self_improvement=False,
                 )
+            if request.sessions:
+                from cognee.modules.weave.review_sessions import sync_review_session
+
+                code_dataset = await repository_dataset(binding, request.github_repository_id)
+                if code_dataset is None:
+                    raise LookupError("Repository code dataset is not ready")
+                for entry in request.sessions:
+                    await sync_review_session(
+                        binding, user, code_dataset, request, entry, llm=llm, embedding=embedding
+                    )
         finally:
             native_organization.reset(token)
         return ReviewMemoryResponse(

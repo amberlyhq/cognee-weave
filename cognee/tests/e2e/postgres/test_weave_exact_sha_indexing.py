@@ -90,45 +90,39 @@ async def test_exact_sha_indexing_keeps_two_repositories_and_a_tenant_canary_iso
 
 
 @pytest.mark.asyncio
-async def test_remember_improvement_failure_is_recorded_and_retried(tmp_path, monkeypatch):
+async def test_code_import_never_calls_memory_or_embedding_models(tmp_path, monkeypatch):
     from uuid import uuid4
-
-    from cognee.memify_pipelines import memify_default_tasks
+    import cognee
+    from cognee.infrastructure.llm.LLMGateway import LLMGateway
     from cognee.modules.weave.deletion import delete_organization
     from cognee.modules.weave.indexing import index_repository_archive
-    from cognee.modules.weave.memory_sources import source_records
-    from cognee.modules.weave.native_memory import customer_snapshots, snapshots_ready
+    from cognee.modules.weave.native_memory import (
+        customer_snapshots,
+        snapshots_ready,
+        recall_repository_memory,
+    )
+    from cognee.modules.weave.contracts import RecallRequest
     from cognee.modules.weave.organizations import provision_organization
 
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("Code-only import/recall must not call a model")
+
     binding = await provision_organization(uuid4())
-    request = _request(binding.organization_id, 920010, "improvement-retry", "d" * 40)
-    archive = _repository_archive(tmp_path, "improvement-retry", "retry")
-
-    async def failing_improvement(data_points, **kwargs):
-        raise RuntimeError("Injected improvement embedding failure")
-
-    with monkeypatch.context() as patch:
-        # The default native pipeline logs an error and then rethrows it.
-        # Do not mock remember or alter its error-handling behavior.
-        patch.setattr(memify_default_tasks, "index_data_points", failing_improvement)
-        with pytest.raises(RuntimeError, match="Injected improvement embedding failure"):
-            await index_repository_archive(request, archive)
-    assert not snapshots_ready(await customer_snapshots(binding.organization_id))
-    assert not await source_records(binding)  # no per-file shadow state
-    improved = []
-    native_improve_task = memify_default_tasks.index_data_points
-
-    async def observed_improve(data_points, **kwargs):
-        result = await native_improve_task(data_points, **kwargs)
-        improved.append(True)
-        return result
-
-    with monkeypatch.context() as patch:
-        patch.setattr(memify_default_tasks, "index_data_points", observed_improve)
-        await index_repository_archive(request, archive)
-    assert improved  # native remember completes its default improvement stage
+    archive = _repository_archive(tmp_path, "code-only", "payment")
+    with zipfile.ZipFile(archive, "a") as contents:
+        contents.writestr("code-only/README.md", "Do not enrich this document")
+        contents.writestr("code-only/screenshot.png", b"invalid-image-should-never-be-loaded")
+    monkeypatch.setattr(cognee, "improve", forbidden)
+    monkeypatch.setattr(LLMGateway, "acreate_structured_output", forbidden)
+    await index_repository_archive(
+        _request(binding.organization_id, 920010, "code-only", "d" * 40), archive
+    )
     assert snapshots_ready(await customer_snapshots(binding.organization_id))
-    assert not await source_records(binding)
+    result = await recall_repository_memory(
+        binding.organization_id, RecallRequest(query="MessagePayment")
+    )
+    assert result.status == "available"
+    assert "MessagePayment" in result.native_memory
     await delete_organization(binding.organization_id, 1)
 
 

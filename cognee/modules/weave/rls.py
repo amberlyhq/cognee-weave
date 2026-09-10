@@ -117,7 +117,13 @@ async def ensure_weave_rls_policies() -> None:
             )
         await session.execute(text(_CREATE_SCHEMA_FUNCTION))
         await session.execute(text(_DROP_ORGANIZATION_SCHEMA_FUNCTION))
-        await session.execute(text(DROP_NATIVE_SCHEMA_FUNCTION))
+        await session.execute(
+            text(DROP_NATIVE_SCHEMA_FUNCTION.replace("-[0-9]+$", "-[0-9]+(-code-v1)?$"))
+        )
+        from cognee.infrastructure.databases.cache.sql.tables import cache_metadata
+
+        connection = await session.connection()
+        await connection.run_sync(lambda conn: cache_metadata.create_all(conn, checkfirst=True))
         await session.execute(
             text(
                 "REVOKE ALL ON FUNCTION public.weave_drop_native_dataset_schema(uuid, uuid) FROM PUBLIC"
