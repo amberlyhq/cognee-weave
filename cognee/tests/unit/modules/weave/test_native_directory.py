@@ -18,9 +18,14 @@ async def test_repository_uses_one_native_directory_operation(tmp_path, monkeypa
 
     binding = SimpleNamespace(organization_id=uuid4(), dataset_id=uuid4(), service_user_id=uuid4())
     user = SimpleNamespace(id=binding.service_user_id, tenant_id=uuid4())
-    dataset = SimpleNamespace(id=uuid4())
+    dataset = SimpleNamespace(id=binding.dataset_id)
     request = SimpleNamespace(
-        repository_owner="amberlyhq", repository_name="test", github_repository_id=42
+        repository_owner="amberlyhq",
+        repository_name="test",
+        github_repository_id=42,
+        organization_id=binding.organization_id,
+        requested_sha="a" * 40,
+        extraction_version="enola-0.3.13",
     )
     repository = tmp_path / "archive-sha"
     repository.mkdir()
@@ -62,6 +67,7 @@ async def test_repository_uses_one_native_directory_operation(tmp_path, monkeypa
             dataset_id=dataset.id,
             user=user,
             content_type="code",
+            repository_provenance=native_memory.repository_provenance(request),
             index_vectors=False,
             self_improvement=False,
             run_in_background=False,
@@ -69,6 +75,13 @@ async def test_repository_uses_one_native_directory_operation(tmp_path, monkeypa
         calls.append("remember")
         return SimpleNamespace(status=status)
 
+    from cognee.modules.weave import code_files, review_code_links
+
+    async def no_graph(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(code_files, "sync_code_files", no_graph)
+    monkeypatch.setattr(review_code_links, "sync_review_code_links", no_graph)
     monkeypatch.setattr(native_memory, "get_user", get_user)
     monkeypatch.setattr(native_memory, "customer_dataset", get_dataset)
     monkeypatch.setattr(native_memory, "repository_dataset", get_dataset)
@@ -76,7 +89,7 @@ async def test_repository_uses_one_native_directory_operation(tmp_path, monkeypa
     monkeypatch.setattr(native_memory, "scoped_database_context_variables", scope)
     monkeypatch.setattr(native_memory, "get_weave_llm_config", lambda: "llm")
     monkeypatch.setattr(native_memory, "get_weave_embedding_config", lambda: "embedding")
-    monkeypatch.setattr(creation, "create_authorized_dataset", get_dataset)
+    monkeypatch.setattr(creation, "create_authorized_dataset", forbidden)
     monkeypatch.setattr(repository_sources, "prepare_repository_sources", prepared, raising=False)
     monkeypatch.setattr(memory_sources, "source_records", no_records)
     monkeypatch.setattr(memory_sources, "sync_source", forbidden)

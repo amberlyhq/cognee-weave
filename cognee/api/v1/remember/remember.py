@@ -66,6 +66,7 @@ class RememberKwargs(TypedDict, total=False):
     content_type: Literal["skills", "code"]
     skill_improvement: dict[str, Any]
     index_vectors: bool
+    repository_provenance: Any
     skills_text: str
     skill_name: str
     primary_key: str
@@ -976,6 +977,7 @@ async def _remember_inner(
     skill_name = kwargs.pop("skill_name", None)
     # code-only kwarg, consumed here for the same reason as the skills ones.
     index_vectors = kwargs.pop("index_vectors", None)
+    repository_provenance = kwargs.pop("repository_provenance", None)
 
     def _requested_node_set(default: str) -> str:
         requested_node_set = kwargs.get("node_set") or [default]
@@ -993,6 +995,12 @@ async def _remember_inner(
         )
     if index_vectors is not None and content_type != "code":
         raise ValueError("index_vectors is supported only for content_type='code'.")
+    if repository_provenance is not None:
+        from cognee.tasks.code_graph.models import RepositoryProvenance
+
+        if content_type != "code":
+            raise ValueError("repository_provenance requires content_type=code")
+        repository_provenance = RepositoryProvenance.model_validate(repository_provenance)
     if content_type == "code" and session_id is not None:
         raise ValueError(
             "session_id is not applicable to content_type='code'; code graphs are "
@@ -1014,6 +1022,9 @@ async def _remember_inner(
                 "content_type='code' expects a repository path or git URL "
                 "(or a list of them) as data."
             )
+
+        if repository_provenance is not None and len(repo_specs) != 1:
+            raise ValueError("repository_provenance identifies exactly one repository")
 
         send_telemetry(
             "cognee.remember.code_graph",
@@ -1063,7 +1074,15 @@ async def _remember_inner(
             repo_path = await resolve_repo_source(spec)
             item = {"kind": "code_repository", "source": str(spec), "path": str(repo_path)}
             pipeline_result = await run_custom_pipeline(
-                tasks=get_code_graph_tasks(str(repo_path), index_vectors=bool(index_vectors)),
+                tasks=get_code_graph_tasks(
+                    str(repo_path),
+                    index_vectors=bool(index_vectors),
+                    **(
+                        {"repository_provenance": repository_provenance}
+                        if repository_provenance is not None
+                        else {}
+                    ),
+                ),
                 data=str(repo_path),
                 dataset=dataset_ref,
                 user=user,

@@ -26,12 +26,6 @@ def _export():
                     "nodes": [["node", {"name": "BetaCanary"}]],
                     "edges": [["node", "node", "references", {}]],
                 },
-                {
-                    "dataset_id": "07432929-98df-4e54-95d1-7d8d4e1305be",
-                    "scope": "customer",
-                    "nodes": [],
-                    "edges": [],
-                },
             ]
         ),
     }
@@ -67,7 +61,9 @@ def test_native_customer_export_passes_the_actual_script_validation(script, tmp_
 
 
 @pytest.mark.parametrize("script", ["weave-parity.sh", "weave-restore-drill.sh"])
-@pytest.mark.parametrize("mutation", ["organization", "repository", "sha", "scope", "nodes"])
+@pytest.mark.parametrize(
+    "mutation", ["organization", "repository", "sha", "scope", "nodes", "extra_dataset"]
+)
 def test_export_validation_still_rejects_wrong_identity_or_missing_graph(
     script, mutation, tmp_path
 ):
@@ -80,7 +76,10 @@ def test_export_validation_still_rejects_wrong_identity_or_missing_graph(
         value["repositories"][0]["indexed_default_sha"] = "a" * 40
     else:
         native = json.loads(value["native_graph"])
-        native[0][mutation] = [] if mutation == "nodes" else "repository"
+        if mutation == "extra_dataset":
+            native.append({**native[0], "dataset_id": "07432929-98df-4e54-95d1-7d8d4e1305be"})
+        else:
+            native[0][mutation] = [] if mutation == "nodes" else "repository"
         value["native_graph"] = json.dumps(native)
     assert _validate(script, value, tmp_path).returncode != 0
 

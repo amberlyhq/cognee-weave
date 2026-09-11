@@ -172,8 +172,8 @@ async def test_every_surface_stays_scoped_through_repository_and_organization_de
     assert await customer_dataset(binding_a) is not None
     assert await customer_dataset(binding_b) is not None
     assert not await source_records(binding_a, 940001)
-    assert await repository_dataset(binding_a, 940002)
-    assert await repository_dataset(binding_b, 940003)
+    assert await customer_dataset(binding_a)
+    assert await customer_dataset(binding_b)
 
     # Index delivery alone cannot revive a removed repository. Only the
     # separately verified GitHub installation lifecycle may reactivate it.
