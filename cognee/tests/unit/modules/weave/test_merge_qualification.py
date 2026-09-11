@@ -9,6 +9,7 @@ PRIOR = {
     "statement": "Payment retries reuse the payment id.",
     "code_path": PATH,
     "evidence": [],
+    "certainty": "observed",
 }
 
 
@@ -36,17 +37,15 @@ def decision(**updates):
     )
 
 
-def mock_gateway(monkeypatch, selections, audits=None):
+def mock_gateway(monkeypatch, selections):
     calls = []
     selections = iter(selections)
-    audits = iter(audits or [])
 
     async def model(**kwargs):
         calls.append(kwargs)
         assert len(kwargs["text_input"]) + len(kwargs["system_prompt"]) <= 60000
         schema = kwargs["response_model"]
-        if schema.__name__ == "MergeAudit":
-            return schema(**next(audits, {"issues": []}))
+        assert schema.__name__ == "MergeSelection", "Qualification must not call a second checker"
         return schema(**next(selections))
 
     monkeypatch.setattr(LLMGateway, "acreate_structured_output", model)
@@ -54,7 +53,7 @@ def mock_gateway(monkeypatch, selections, audits=None):
 
 
 @pytest.mark.asyncio
-async def test_source_quotes_are_attached_and_keep_is_audited(monkeypatch):
+async def test_single_qualification_attaches_sources_without_second_checker(monkeypatch):
     from cognee.modules.weave.merge_qualification import qualify_merge
 
     calls = mock_gateway(monkeypatch, [dict(facts=[fact()], decisions=[decision()])])
@@ -66,11 +65,11 @@ async def test_source_quotes_are_attached_and_keep_is_audited(monkeypatch):
     )
     assert result["coverage_complete"] is True
     assert result["facts"][0]["evidence"] == [
-        dict(evidence_id=f'merge:{"a" * 40}:{PATH}:1', quote=SOURCE)
+        dict(evidence_id=f"merge:{'a' * 40}:{PATH}:1", quote=SOURCE)
     ]
     assert result["decisions"][0]["status"] == "keep"
     assert "actual merged source" in calls[0]["system_prompt"]
-    assert len(calls) == 2
+    assert len(calls) == 1
 
 
 @pytest.mark.asyncio
@@ -78,9 +77,7 @@ async def test_missing_prior_decision_stays_unverified(monkeypatch):
     from cognee.modules.weave.merge_qualification import qualify_merge
 
     mock_gateway(monkeypatch, [dict(facts=[], decisions=[])])
-    result = await qualify_merge(
-        head_sha="a" * 40, files={PATH: SOURCE}, prior_facts=[PRIOR]
-    )
+    result = await qualify_merge(head_sha="a" * 40, files={PATH: SOURCE}, prior_facts=[PRIOR])
     assert result["decisions"][0]["status"] == "unverified"
     assert result["coverage_complete"] is False
 
@@ -96,37 +93,26 @@ async def test_hallucinated_path_gets_repair_and_preserves_accepted_fact(monkeyp
             dict(facts=[], decisions=[]),
         ],
     )
-    result = await qualify_merge(
-        head_sha="a" * 40, files={PATH: SOURCE}, prior_facts=[]
-    )
+    result = await qualify_merge(head_sha="a" * 40, files={PATH: SOURCE}, prior_facts=[])
     assert len(result["facts"]) == 1
     assert "REPAIR" in calls[-1]["text_input"]
     assert "foreign.ts" in calls[-1]["text_input"]
 
 
 @pytest.mark.asyncio
-async def test_audit_rejected_keep_is_retried_then_unverified(monkeypatch):
+async def test_invalid_reference_is_retried_then_unverified(monkeypatch):
     from cognee.modules.weave.merge_qualification import qualify_merge
 
     calls = mock_gateway(
         monkeypatch,
-        [dict(facts=[], decisions=[decision()]), dict(facts=[], decisions=[])],
         [
-            dict(
-                issues=[
-                    dict(
-                        item_index=0,
-                        reason="The quote does not establish the prior claim.",
-                    )
-                ]
-            )
+            dict(facts=[], decisions=[decision(evidence_ids=["missing"])]),
+            dict(facts=[], decisions=[]),
         ],
     )
-    result = await qualify_merge(
-        head_sha="a" * 40, files={PATH: SOURCE}, prior_facts=[PRIOR]
-    )
+    result = await qualify_merge(head_sha="a" * 40, files={PATH: SOURCE}, prior_facts=[PRIOR])
     assert result["decisions"][0]["status"] == "unverified"
-    assert "does not establish" in calls[-1]["text_input"]
+    assert "Select actual printed source passage IDs" in calls[-1]["text_input"]
 
 
 @pytest.mark.asyncio
@@ -203,14 +189,12 @@ async def test_foreign_and_duplicate_decisions_never_apply(monkeypatch):
             dict(facts=[], decisions=[]),
         ],
     )
-    result = await qualify_merge(
-        head_sha="a" * 40, files={PATH: SOURCE}, prior_facts=[PRIOR]
-    )
+    result = await qualify_merge(head_sha="a" * 40, files={PATH: SOURCE}, prior_facts=[PRIOR])
     assert result["decisions"] == [
         dict(
             fact_id="old",
             status="unverified",
-            reason="No independently supported decision was returned.",
+            reason="No source-linked decision was returned.",
         )
     ]
 
@@ -220,9 +204,7 @@ async def test_keep_always_returns_fresh_source_backed_fact(monkeypatch):
     from cognee.modules.weave.merge_qualification import qualify_merge
 
     mock_gateway(monkeypatch, [dict(facts=[], decisions=[decision()])])
-    result = await qualify_merge(
-        head_sha="a" * 40, files={PATH: SOURCE}, prior_facts=[PRIOR]
-    )
+    result = await qualify_merge(head_sha="a" * 40, files={PATH: SOURCE}, prior_facts=[PRIOR])
     assert result["decisions"][0]["status"] == "keep"
     assert result["facts"][0]["statement"] == PRIOR["statement"]
     assert result["facts"][0]["certainty"] == "observed"
@@ -236,9 +218,7 @@ async def test_evidence_paths_come_only_from_accepted_server_passages(monkeypatc
     second_path = "payments/send.ts"
     second_source = "export const send = (id) => request({ id });\n"
     unused_path = "payments/unused.ts"
-    mock_gateway(
-        monkeypatch, [dict(facts=[fact(evidence_ids=["E1", "E2"])], decisions=[])]
-    )
+    mock_gateway(monkeypatch, [dict(facts=[fact(evidence_ids=["E1", "E2"])], decisions=[])])
     result = await qualify_merge(
         head_sha="a" * 40,
         files={
@@ -249,29 +229,20 @@ async def test_evidence_paths_come_only_from_accepted_server_passages(monkeypatc
         prior_facts=[],
     )
     assert result["evidence_paths"] == {
-        f'merge:{"a" * 40}:{PATH}:1': PATH,
-        f'merge:{"a" * 40}:{second_path}:1': second_path,
+        f"merge:{'a' * 40}:{PATH}:1": PATH,
+        f"merge:{'a' * 40}:{second_path}:1": second_path,
     }
 
 
 @pytest.mark.asyncio
-async def test_rejected_facts_do_not_leave_evidence_paths(monkeypatch):
+async def test_invalid_references_do_not_leave_evidence_paths(monkeypatch):
     from cognee.modules.weave.merge_qualification import qualify_merge
 
     mock_gateway(
         monkeypatch,
-        [dict(facts=[fact()], decisions=[]), dict(facts=[], decisions=[])],
-        [
-            dict(
-                issues=[
-                    dict(item_index=0, reason="Unsupported interpretation of source.")
-                ]
-            )
-        ],
+        [dict(facts=[fact(evidence_ids=["missing"])], decisions=[]), dict(facts=[], decisions=[])],
     )
-    result = await qualify_merge(
-        head_sha="a" * 40, files={PATH: SOURCE}, prior_facts=[]
-    )
+    result = await qualify_merge(head_sha="a" * 40, files={PATH: SOURCE}, prior_facts=[])
     assert result["facts"] == []
     assert result["evidence_paths"] == {}
 
@@ -281,7 +252,30 @@ async def test_keep_copy_has_server_owned_evidence_path(monkeypatch):
     from cognee.modules.weave.merge_qualification import qualify_merge
 
     mock_gateway(monkeypatch, [dict(facts=[], decisions=[decision()])])
+    result = await qualify_merge(head_sha="a" * 40, files={PATH: SOURCE}, prior_facts=[PRIOR])
+    assert result["evidence_paths"] == {f"merge:{'a' * 40}:{PATH}:1": PATH}
+
+
+@pytest.mark.asyncio
+async def test_model_owns_certainty_and_receives_complete_bounded_source(monkeypatch):
+    from cognee.modules.weave.merge_qualification import qualify_merge
+
+    source = SOURCE + " " * 1000 + "export const other = () => fallback();"
+    calls = mock_gateway(monkeypatch, [dict(facts=[fact(certainty="hypothesis")], decisions=[])])
+    result = await qualify_merge(head_sha="a" * 40, files={PATH: source}, prior_facts=[])
+    assert result["facts"][0]["certainty"] == "hypothesis"
+    assert "fallback()" in calls[0]["text_input"]
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("certainty", ["reported", "hypothesis", "observed"])
+async def test_keep_preserves_prior_certainty(monkeypatch, certainty):
+    from cognee.modules.weave.merge_qualification import qualify_merge
+
+    calls = mock_gateway(monkeypatch, [dict(facts=[], decisions=[decision()])])
     result = await qualify_merge(
-        head_sha="a" * 40, files={PATH: SOURCE}, prior_facts=[PRIOR]
+        head_sha="a" * 40, files={PATH: SOURCE}, prior_facts=[PRIOR | {"certainty": certainty}]
     )
-    assert result["evidence_paths"] == {f'merge:{"a" * 40}:{PATH}:1': PATH}
+    assert result["facts"][0]["certainty"] == certainty
+    assert '"certainty": "' + certainty + '"' in calls[0]["text_input"]

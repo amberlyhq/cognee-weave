@@ -186,29 +186,37 @@ async def process_merge(
                 continue
             if record.dataset_id != binding.dataset_id:
                 raise ValueError("Foreign merge source")
+            live_facts = []
+            affected = False
             for fact in record.qualification.get("facts", []):
                 digest = fact_digest(fact)
                 state = record.qualification.get("fact_states", {}).get(digest, {})
                 if state.get("status") == "superseded":
                     continue
-                if (
+                live_facts.append((fact, digest))
+                affected |= (
                     fact["code_path"] in change.changed_paths
                     or state.get("status") == "needs_recheck"
-                ):
-                    fact_id = str(
-                        uuid5(
-                            binding.organization_id,
-                            f"review-fact.v1:{repository_id}:{record.source_key}:{digest}",
-                        )
+                )
+            if not affected:
+                continue
+            # Recall admits whole source documents. Replacing any live fact
+            # must also requalify its siblings so their current copies survive.
+            for fact, digest in live_facts:
+                fact_id = str(
+                    uuid5(
+                        binding.organization_id,
+                        f"review-fact.v1:{repository_id}:{record.source_key}:{digest}",
                     )
-                    priors.append(
-                        {
-                            **fact,
-                            "fact_id": fact_id,
-                            "source_key": record.source_key,
-                            "digest": digest,
-                        }
-                    )
+                )
+                priors.append(
+                    {
+                        **fact,
+                        "fact_id": fact_id,
+                        "source_key": record.source_key,
+                        "digest": digest,
+                    }
+                )
         plan = {
             "facts": [],
             "batches": build_batches(repository, change.changed_paths, priors),

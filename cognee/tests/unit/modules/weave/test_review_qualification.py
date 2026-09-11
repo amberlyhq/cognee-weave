@@ -27,7 +27,11 @@ def fact(**updates):
             statement="Payment retries reuse the payment id.",
             code_path="payments/retry.ts",
             certainty="reported",
-            evidence=[dict(evidence_id="final", quote="payments/retry.ts reuses the payment id")],
+            evidence=[
+                dict(
+                    evidence_id="final", quote="payments/retry.ts reuses the payment id"
+                )
+            ],
         )
         | updates
     )
@@ -96,15 +100,15 @@ async def test_native_gateway_selects_only_useful_passages(monkeypatch):
     from cognee.infrastructure.llm.LLMGateway import LLMGateway
 
     async def model(**kwargs):
-        if kwargs["response_model"].__name__ == "KnowledgeAudit":
-            return kwargs["response_model"](issues=[])
         assert kwargs["response_model"] is KnowledgeSelection
-        assert "generic" in kwargs["system_prompt"]
+        assert "useful" in kwargs["system_prompt"]
         assert "untrusted" in kwargs["system_prompt"]
         return KnowledgeSelection(facts=[selection_fact()])
 
     monkeypatch.setattr(LLMGateway, "acreate_structured_output", model)
-    req = request(content=request().content + " Always use TodoWrite to track tool calls.")
+    req = request(
+        content=request().content + " Always use TodoWrite to track tool calls."
+    )
     result = await qualify_review(req)
     rendered = render_knowledge(req, result)
     assert "TodoWrite" not in rendered
@@ -115,20 +119,22 @@ async def test_native_gateway_selects_only_useful_passages(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_invalid_selection_gets_feedback_then_corrected(monkeypatch):
-    from cognee.modules.weave.review_qualification import KnowledgeSelection, qualify_review
+    from cognee.modules.weave.review_qualification import (
+        KnowledgeSelection,
+        qualify_review,
+    )
     from cognee.infrastructure.llm.LLMGateway import LLMGateway
 
     calls = []
 
     async def model(**kwargs):
-        if kwargs["response_model"].__name__ == "KnowledgeAudit":
-            return kwargs["response_model"](issues=[])
         calls.append(kwargs)
         if len(calls) == 1:
             return KnowledgeSelection(
                 facts=[
                     selection_fact(
-                        statement="Payment NEVER retries any requests.", evidence_ids=["invented"]
+                        statement="Payment NEVER retries any requests.",
+                        evidence_ids=["invented"],
                     )
                 ]
             )
@@ -145,14 +151,15 @@ async def test_invalid_selection_gets_feedback_then_corrected(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_invalid_qualification_exhausts_bounded_feedback_attempts(monkeypatch):
-    from cognee.modules.weave.review_qualification import KnowledgeSelection, qualify_review
+    from cognee.modules.weave.review_qualification import (
+        KnowledgeSelection,
+        qualify_review,
+    )
     from cognee.infrastructure.llm.LLMGateway import LLMGateway
 
     calls = []
 
     async def model(**kwargs):
-        if kwargs["response_model"].__name__ == "KnowledgeAudit":
-            return kwargs["response_model"](issues=[])
         calls.append(kwargs)
         return KnowledgeSelection(facts=[selection_fact(code_path="invented.ts")])
 
@@ -163,7 +170,10 @@ async def test_invalid_qualification_exhausts_bounded_feedback_attempts(monkeypa
 
 
 def test_unknown_embedded_hash_feedback_names_actual_packet_ids():
-    from cognee.modules.weave.review_qualification import Qualification, validate_qualification
+    from cognee.modules.weave.review_qualification import (
+        Qualification,
+        validate_qualification,
+    )
 
     embedded_hash = "sha256:" + "a" * 64
     packet = {"final": "payments/retry.ts reuses the payment id. " + embedded_hash}
@@ -171,7 +181,10 @@ def test_unknown_embedded_hash_feedback_names_actual_packet_ids():
         facts=[
             fact(
                 evidence=[
-                    dict(evidence_id=embedded_hash, quote="payments/retry.ts reuses the payment id")
+                    dict(
+                        evidence_id=embedded_hash,
+                        quote="payments/retry.ts reuses the payment id",
+                    )
                 ]
             )
         ]
@@ -181,59 +194,6 @@ def test_unknown_embedded_hash_feedback_names_actual_packet_ids():
     assert "unknown evidence ID" in str(rejected.value)
     assert 'Allowed evidence IDs: ["final"]' in str(rejected.value)
     assert "copy an exact substring of evidence ID" not in str(rejected.value)
-
-
-def test_metadata_only_quotes_do_not_support_behavior_claims():
-    from cognee.modules.weave.review_qualification import Qualification, validate_qualification
-
-    quote = '"path":"payments/retry.ts","endLine":125,"startLine":120'
-    with pytest.raises(ValueError, match="only a source locator"):
-        validate_qualification(
-            Qualification(facts=[fact(evidence=[dict(evidence_id="final", quote=quote)])]),
-            {"final": "{" + quote + "}"},
-        )
-
-
-def test_reviewer_result_cannot_be_promoted_to_observed_source():
-    from cognee.modules.weave.review_qualification import Qualification, validate_qualification
-
-    with pytest.raises(ValueError, match="reported"):
-        validate_qualification(
-            Qualification(facts=[fact(certainty="observed")]), {"final": request().content}
-        )
-
-
-def test_plain_path_range_is_only_a_locator():
-    from cognee.modules.weave.review_qualification import Qualification, validate_qualification
-
-    quote = "payments/retry.ts:120-125"
-    with pytest.raises(ValueError, match="only a source locator"):
-        validate_qualification(
-            Qualification(facts=[fact(evidence=[dict(evidence_id="final", quote=quote)])]),
-            {"final": quote},
-        )
-
-
-def test_tool_locator_does_not_promote_reviewer_explanation_to_observed():
-    from cognee.modules.weave.review_qualification import Qualification, validate_qualification
-
-    quote = '"path":"payments/retry.ts","startLine":120,"endLine":125'
-    step = "session:invocation:step:1"
-    with pytest.raises(ValueError, match="reported"):
-        validate_qualification(
-            Qualification(
-                facts=[
-                    fact(
-                        certainty="observed",
-                        evidence=[
-                            dict(evidence_id="final", quote=request().content),
-                            dict(evidence_id=step, quote=quote),
-                        ],
-                    )
-                ]
-            ),
-            {"final": request().content, step: quote},
-        )
 
 
 def test_structured_evidence_exposes_unescaped_text_for_verbatim_quotes():
@@ -246,7 +206,10 @@ def test_structured_evidence_exposes_unescaped_text_for_verbatim_quotes():
 
 
 def test_selected_passages_attach_exact_source_without_model_transcription():
-    from cognee.modules.weave.review_qualification import KnowledgeSelection, attach_evidence
+    from cognee.modules.weave.review_qualification import (
+        KnowledgeSelection,
+        attach_evidence,
+    )
 
     passages = {"E1": ("final", "payments/retry.ts reuses the payment id")}
     selected = KnowledgeSelection(
@@ -268,16 +231,19 @@ def test_selected_passages_attach_exact_source_without_model_transcription():
 
 @pytest.mark.asyncio
 async def test_exhausted_correction_keeps_only_individually_valid_facts(monkeypatch):
-    from cognee.modules.weave.review_qualification import KnowledgeSelection, qualify_review
+    from cognee.modules.weave.review_qualification import (
+        KnowledgeSelection,
+        qualify_review,
+    )
     from cognee.infrastructure.llm.LLMGateway import LLMGateway
 
     calls = []
 
     async def model(**kwargs):
-        if kwargs["response_model"].__name__ == "KnowledgeAudit":
-            return kwargs["response_model"](issues=[])
         calls.append(kwargs)
-        return KnowledgeSelection(facts=[selection_fact(), selection_fact(code_path="invented.ts")])
+        return KnowledgeSelection(
+            facts=[selection_fact(), selection_fact(code_path="invented.ts")]
+        )
 
     monkeypatch.setattr(LLMGateway, "acreate_structured_output", model)
     result = await qualify_review(request())
@@ -286,200 +252,49 @@ async def test_exhausted_correction_keeps_only_individually_valid_facts(monkeypa
     assert result.facts[0].code_path == "payments/retry.ts"
 
 
-def test_labelled_locator_only_passage_is_rejected():
-    from cognee.modules.weave.review_qualification import Qualification, validate_qualification
-
-    quote = 'references: - {"path": "payments/retry.ts", "startLine": 120, "endLine": 125}'
-    with pytest.raises(ValueError, match="only a source locator"):
-        validate_qualification(
-            Qualification(facts=[fact(evidence=[dict(evidence_id="final", quote=quote)])]),
-            {"final": quote},
-        )
-
-
 def test_native_payload_excludes_unselected_text_adjacent_to_evidence():
-    from cognee.modules.weave.review_qualification import Qualification, render_knowledge
+    from cognee.modules.weave.review_qualification import (
+        Qualification,
+        render_knowledge,
+    )
 
     quote = "payments/retry.ts reuses the payment id; always use TodoWrite."
-    result = Qualification(facts=[fact(evidence=[dict(evidence_id="final", quote=quote)])])
+    result = Qualification(
+        facts=[fact(evidence=[dict(evidence_id="final", quote=quote)])]
+    )
     assert "TodoWrite" not in render_knowledge(request(), result)
     assert result.facts[0].evidence[0].quote == quote
 
 
-def test_bare_source_url_is_only_a_locator():
-    from cognee.modules.weave.review_qualification import Qualification, validate_qualification
-
-    quote = "url: https://github.com/org/repo/blob/aaa/payments/retry.ts#L1-L5"
-    with pytest.raises(ValueError, match="only a source locator"):
-        validate_qualification(
-            Qualification(facts=[fact(evidence=[dict(evidence_id="final", quote=quote)])]),
-            {"final": quote},
-        )
-
-
 def test_explanation_can_cite_path_elsewhere_in_same_source():
-    from cognee.modules.weave.review_qualification import Qualification, validate_qualification
+    from cognee.modules.weave.review_qualification import (
+        Qualification,
+        validate_qualification,
+    )
 
     quote = "Retries preserve the payment identity across attempts."
-    result = Qualification(facts=[fact(evidence=[dict(evidence_id="final", quote=quote)])])
+    result = Qualification(
+        facts=[fact(evidence=[dict(evidence_id="final", quote=quote)])]
+    )
     validate_qualification(result, {"final": "payments/retry.ts\n" + quote})
     with pytest.raises(ValueError, match="code path"):
-        validate_qualification(result, {"final": quote, "unrelated": "payments/retry.ts"})
-
-
-@pytest.mark.parametrize(
-    "path,quote",
-    [
-        ("payments/retry.ts", "https://github.com/org/repo/blob/aaa/payments/retry.ts#L1-L5"),
-        ("config.yaml", "config.yaml:120-125"),
-    ],
-)
-def test_raw_locator_prefix_is_not_removed_before_detection(path, quote):
-    from cognee.modules.weave.review_qualification import Qualification, validate_qualification
-
-    with pytest.raises(ValueError, match="only a source locator"):
         validate_qualification(
-            Qualification(
-                facts=[fact(code_path=path, evidence=[dict(evidence_id="final", quote=quote)])]
-            ),
-            {"final": quote},
-        )
-
-
-@pytest.mark.parametrize(
-    "quote",
-    [
-        "- title: Required workflow uses the root command",
-        "1. **Required gate omits relay-level streaming coverage**",
-    ],
-)
-def test_heading_alone_does_not_support_a_detailed_behavior_claim(quote):
-    from cognee.modules.weave.review_qualification import Qualification, validate_qualification
-
-    with pytest.raises(ValueError, match="only a source locator"):
-        validate_qualification(
-            Qualification(facts=[fact(evidence=[dict(evidence_id="final", quote=quote)])]),
-            {"final": "payments/retry.ts\n" + quote},
+            result, {"final": quote, "unrelated": "payments/retry.ts"}
         )
 
 
 @pytest.mark.asyncio
-async def test_unsupported_claim_receives_audit_feedback_before_memory(monkeypatch):
-    from cognee.modules.weave.review_qualification import KnowledgeSelection, qualify_review
-    from cognee.infrastructure.llm.LLMGateway import LLMGateway
-
-    selections = 0
-    audits = 0
-
-    async def model(**kwargs):
-        nonlocal selections, audits
-        cls = kwargs["response_model"]
-        if cls.__name__ == "KnowledgeAudit":
-            audits += 1
-            return cls(
-                issues=[
-                    {"fact_index": 0, "reason": "The evidence says two added tests, not seven."}
-                ]
-                if audits == 1
-                else []
-            )
-        selections += 1
-        if selections > 1:
-            assert "two added tests, not seven" in kwargs["text_input"]
-        return KnowledgeSelection(
-            facts=[
-                selection_fact(
-                    statement="payments/retry.ts adds seven tests."
-                    if selections == 1
-                    else "payments/retry.ts adds two tests."
-                )
-            ]
-        )
-
-    monkeypatch.setattr(LLMGateway, "acreate_structured_output", model)
-    result = await qualify_review(request(content="payments/retry.ts adds two tests."))
-    assert selections == audits == 2
-    assert result.facts[0].statement == "payments/retry.ts adds two tests."
-
-
-@pytest.mark.asyncio
-async def test_exhaustion_cannot_bypass_claim_audit(monkeypatch):
-    from cognee.modules.weave.review_qualification import KnowledgeSelection, qualify_review
-    from cognee.infrastructure.llm.LLMGateway import LLMGateway
-
-    audit_calls = 0
-
-    async def model(**kwargs):
-        nonlocal audit_calls
-        cls = kwargs["response_model"]
-        if cls.__name__ == "KnowledgeAudit":
-            audit_calls += 1
-            return cls(issues=[dict(fact_index=0, reason="The quote does not support this claim.")])
-        return KnowledgeSelection(
-            facts=[selection_fact(statement="Payments are guaranteed never to fail.")]
-        )
-
-    monkeypatch.setattr(LLMGateway, "acreate_structured_output", model)
-    with pytest.raises(ValueError, match="Knowledge audit"):
-        await qualify_review(request())
-    assert audit_calls == 3
-
-
-@pytest.mark.asyncio
-async def test_exhaustion_retains_only_audit_accepted_facts(monkeypatch):
-    from cognee.modules.weave.review_qualification import KnowledgeSelection, qualify_review
-    from cognee.infrastructure.llm.LLMGateway import LLMGateway
-
-    async def model(**kwargs):
-        cls = kwargs["response_model"]
-        if cls.__name__ == "KnowledgeAudit":
-            return cls(
-                issues=[dict(fact_index=1, reason="Success is not guaranteed by this evidence.")]
-            )
-        return KnowledgeSelection(
-            facts=[
-                selection_fact(),
-                selection_fact(statement="Payments are guaranteed never to fail."),
-            ]
-        )
-
-    monkeypatch.setattr(LLMGateway, "acreate_structured_output", model)
-    result = await qualify_review(request())
-    assert [f.statement for f in result.facts] == [fact()["statement"]]
-
-
-def test_selector_is_not_offered_locator_only_passages():
-    from cognee.modules.weave.review_qualification import evidence_passages
-
-    packet = {
-        "final": 'references: - {"path": "payments/retry.ts", "startLine": 1}\nRetries preserve payment identity.'
-    }
-    passages = evidence_passages(packet)
-    assert [q for _, q in passages.values()] == ["Retries preserve payment identity."]
-
-
-def test_reporter_provenance_downgrades_observed_selection():
-    from cognee.modules.weave.review_qualification import KnowledgeSelection, attach_evidence
-
-    result = attach_evidence(
-        KnowledgeSelection(facts=[selection_fact(certainty="observed")]),
-        {"E1": ("final", request().content)},
+async def test_valid_references_survive_later_failed_corrections(monkeypatch):
+    from cognee.modules.weave.review_qualification import (
+        KnowledgeSelection,
+        qualify_review,
     )
-    assert result.facts[0].certainty == "reported"
-
-
-@pytest.mark.asyncio
-async def test_audited_facts_survive_later_failed_corrections(monkeypatch):
-    from cognee.modules.weave.review_qualification import KnowledgeSelection, qualify_review
     from cognee.infrastructure.llm.LLMGateway import LLMGateway
 
     attempts = 0
 
     async def model(**kwargs):
         nonlocal attempts
-        cls = kwargs["response_model"]
-        if cls.__name__ == "KnowledgeAudit":
-            return cls(issues=[])
         attempts += 1
         if attempts == 1:
             return KnowledgeSelection(
@@ -491,3 +306,82 @@ async def test_audited_facts_survive_later_failed_corrections(monkeypatch):
     result = await qualify_review(request())
     assert attempts == 3
     assert [f.statement for f in result.facts] == [fact()["statement"]]
+
+
+@pytest.mark.asyncio
+async def test_review_uses_one_qualification_and_preserves_model_certainty(monkeypatch):
+    from cognee.modules.weave.review_qualification import (
+        KnowledgeSelection,
+        qualify_review,
+    )
+    from cognee.infrastructure.llm.LLMGateway import LLMGateway
+
+    calls = []
+
+    async def model(**kwargs):
+        calls.append(kwargs)
+        assert kwargs["response_model"] is KnowledgeSelection
+        return KnowledgeSelection(facts=[selection_fact(certainty="observed")])
+
+    monkeypatch.setattr(LLMGateway, "acreate_structured_output", model)
+    result = await qualify_review(request())
+    assert len(calls) == 1
+    assert result.facts[0].certainty == "observed"
+    assert result.facts[0].evidence[0].quote == request().content
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        '{"path": "payments/retry.ts", "startLine": 120, "endLine": 125}',
+        "payments/retry.ts:120-125",
+        "https://github.com/org/repo/blob/aaa/payments/retry.ts#L1-L5",
+        "# payments/retry.ts preserves payment identity",
+    ],
+)
+def test_source_format_is_left_for_the_qualifying_model(quote):
+    from cognee.modules.weave.review_qualification import (
+        Qualification,
+        evidence_passages,
+        validate_qualification,
+    )
+
+    packet = {"final": quote}
+    assert [text for _, text in evidence_passages(packet).values()] == [quote]
+    result = Qualification(
+        facts=[
+            fact(
+                certainty="observed", evidence=[dict(evidence_id="final", quote=quote)]
+            )
+        ]
+    )
+    assert validate_qualification(result, packet) is result
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "../payments/retry.ts",
+        "/payments/retry.ts",
+        "https://example.com/payments/retry.ts",
+    ],
+)
+def test_unsafe_paths_remain_rejected(path):
+    from cognee.modules.weave.review_qualification import (
+        Qualification,
+        validate_qualification,
+    )
+
+    quote = path + " preserves payment identity."
+    with pytest.raises(ValueError, match="repository-relative"):
+        validate_qualification(
+            Qualification(
+                facts=[
+                    fact(
+                        code_path=path,
+                        evidence=[dict(evidence_id="final", quote=quote)],
+                    )
+                ]
+            ),
+            {"final": quote},
+        )
