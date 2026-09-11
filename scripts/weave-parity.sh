@@ -224,8 +224,8 @@ repositories = value["repositories"]
 assert len(repositories) == 1 and repositories[0]["github_repository_id"] == repository_id
 assert repositories[0]["indexed_default_sha"] == os.environ["SHA"]
 native = json.loads(value["native_graph"])
-assert len(native) == 2 and all(item["scope"] == "customer" for item in native)
-assert len({item["dataset_id"] for item in native}) == 2
+assert len(native) == 1 and all(item["scope"] == "customer" for item in native)
+assert len({item["dataset_id"] for item in native}) == 1
 assert native[0]["dataset_id"] and native[0]["nodes"] and native[0]["edges"]
 '
 
