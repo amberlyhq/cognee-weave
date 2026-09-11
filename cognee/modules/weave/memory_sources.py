@@ -79,6 +79,7 @@ async def sync_source(
     artifact_revision=None,
     improve_after_update=False,
     self_improvement=True,
+    node_set=None,
 ):
     import cognee
 
@@ -119,9 +120,10 @@ async def sync_source(
         await session.commit()
 
     item.data_id = data_id
+    native_options = {"node_set": node_set} if node_set is not None else {}
     if action == "update":
         result = await cognee.update(
-            data_id=data_id, data=item, dataset_id=binding.dataset_id, user=user
+            data_id=data_id, data=item, dataset_id=binding.dataset_id, user=user, **native_options
         )
     else:
         result = await cognee.remember(
@@ -131,6 +133,7 @@ async def sync_source(
             llm_config=llm,
             embedding_config=embedding,
             self_improvement=self_improvement,
+            **native_options,
         )
     assert_native_completed(result)
     if action == "update" and (improve_after_update or (retry_improvement and self_improvement)):

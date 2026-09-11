@@ -6,11 +6,15 @@ from uuid import uuid4
 
 import pytest
 
-pytestmark = pytest.mark.skipif(os.getenv("DB_PROVIDER") != "postgres", reason="requires Postgres")
+pytestmark = pytest.mark.skipif(
+    os.getenv("DB_PROVIDER") != "postgres", reason="requires Postgres"
+)
 
 
 @pytest.mark.asyncio
-async def test_native_review_learning_retries_and_survives_code_refresh(tmp_path, monkeypatch):
+async def test_native_review_learning_retries_and_survives_code_refresh(
+    tmp_path, monkeypatch
+):
     from cognee.infrastructure.llm.LLMGateway import LLMGateway
     from cognee.context_global_variables import scoped_database_context_variables
     from cognee.infrastructure.databases.graph import get_graph_engine
@@ -18,9 +22,18 @@ async def test_native_review_learning_retries_and_survives_code_refresh(tmp_path
     from cognee.modules.weave.contracts import ReviewMemoryRequest
     from cognee.modules.weave.organizations import provision_organization
     from cognee.modules.weave.native_memory import customer_dataset
-    from cognee.modules.weave.indexing import index_repository_archive, weave_operation_lock
-    from cognee.modules.weave.review_sessions import sync_review_session, session_identity
-    from cognee.modules.weave.config import get_weave_llm_config, get_weave_embedding_config
+    from cognee.modules.weave.indexing import (
+        index_repository_archive,
+        weave_operation_lock,
+    )
+    from cognee.modules.weave.review_sessions import (
+        sync_review_session,
+        session_identity,
+    )
+    from cognee.modules.weave.config import (
+        get_weave_llm_config,
+        get_weave_embedding_config,
+    )
     from cognee.modules.weave.memory_sources import source_records
     from cognee.modules.weave.deletion import delete_organization
     from cognee.modules.users.methods import get_user
@@ -146,7 +159,7 @@ async def test_native_review_learning_retries_and_survives_code_refresh(tmp_path
     try:
         with pytest.raises(RuntimeError, match="Injected provider outage"):
             await sync()
-        assert (await source_records(binding))[0].status != "completed"
+        assert any(r.status != "completed" for r in await source_records(binding))
         extracted = calls.count("AgentContextExtraction")
         fail = False
         assert await sync() == "remember"
@@ -166,7 +179,9 @@ async def test_native_review_learning_retries_and_survives_code_refresh(tmp_path
         )
         assert (
             await manager.get_session(
-                user_id=str(canary.service_user_id), session_id=native_id, formatted=False
+                user_id=str(canary.service_user_id),
+                session_id=native_id,
+                formatted=False,
             )
             == []
         )
@@ -221,11 +236,15 @@ async def test_native_review_learning_retries_and_survives_code_refresh(tmp_path
         )
         assert context.status == "available"
         assert "MessagePayment" in context.native_memory
-        assert [diagnostic.code for diagnostic in context.diagnostics] == ["backend_unavailable"]
+        assert (
+            context.diagnostics == []
+        )  # Untagged historical sessions never enter current recall.
 
         await delete_organization(binding.organization_id, 1)
         assert (
-            await manager.get_session(user_id=str(user.id), session_id=native_id, formatted=False)
+            await manager.get_session(
+                user_id=str(user.id), session_id=native_id, formatted=False
+            )
             == []
         )
     finally:

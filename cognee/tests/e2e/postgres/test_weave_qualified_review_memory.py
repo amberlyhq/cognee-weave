@@ -9,7 +9,9 @@ from uuid import uuid4
 
 import pytest
 
-pytestmark = pytest.mark.skipif(os.getenv("DB_PROVIDER") != "postgres", reason="requires Postgres")
+pytestmark = pytest.mark.skipif(
+    os.getenv("DB_PROVIDER") != "postgres", reason="requires Postgres"
+)
 
 
 @pytest.mark.asyncio
@@ -53,14 +55,16 @@ async def test_qualified_review_uses_native_memory_and_replays_without_model_cal
             calls.append(cls.__name__)
             if cls.__name__ == "KnowledgeAudit":
                 return cls(
-                    issues=[
-                        dict(
-                            fact_index=0,
-                            reason="The claim that it never returns a message is not supported.",
-                        )
-                    ]
-                    if calls.count("KnowledgeAudit") == 1
-                    else []
+                    issues=(
+                        [
+                            dict(
+                                fact_index=0,
+                                reason="The claim that it never returns a message is not supported.",
+                            )
+                        ]
+                        if calls.count("KnowledgeAudit") == 1
+                        else []
+                    )
                 )
             if cls.__name__ == "KnowledgeSelection":
                 if calls.count("KnowledgeSelection") == 1:
@@ -105,13 +109,21 @@ async def test_qualified_review_uses_native_memory_and_replays_without_model_cal
             raise AssertionError(f"Unexpected native model stage {cls.__name__}")
 
         monkeypatch.setattr(LLMGateway, "acreate_structured_output", model)
-        assert (await remember_review(binding.organization_id, req)).status == "remember"
-        receipts = await source_records(binding)
+        assert (
+            await remember_review(binding.organization_id, req)
+        ).status == "remember"
+        receipts = [
+            r
+            for r in await source_records(binding)
+            if r.source_key.startswith("review:qualified:")
+        ]
         assert len(receipts) == 1
         assert receipts[0].status == "completed"
         assert receipts[0].qualification["facts"][0]["code_path"] == "main.go"
         assert not await source_records(canary)
-        async with scoped_database_context_variables(binding.dataset_id, binding.service_user_id):
+        async with scoped_database_context_variables(
+            binding.dataset_id, binding.service_user_id
+        ):
             nodes, edges = await (await get_graph_engine()).get_graph_data()
         facts = [(i, p) for i, p in nodes if p.get("type") == "ReviewKnowledge"]
         assert len(facts) == 1
@@ -126,43 +138,67 @@ async def test_qualified_review_uses_native_memory_and_replays_without_model_cal
             and p.get("github_repository_id") == repo
         }
         assert any(
-            a == fact_id and b in file_ids and r == "review_context_for" for a, b, r, _ in edges
+            a == fact_id and b in file_ids and r == "review_context_for"
+            for a, b, r, _ in edges
         )
         assert any("MessagePayment" in str(p) for _, p in nodes)
         assert "TodoWrite" not in str(nodes)
         # Recall must accept the receipt namespace, and code refresh must retain
         # qualified knowledge and its replay receipt.
-        from cognee.modules.weave.native_memory import customer_snapshots, memory_datasets
+        from cognee.modules.weave.native_memory import (
+            customer_snapshots,
+            memory_datasets,
+        )
 
-        assert await memory_datasets(binding, await customer_snapshots(binding.organization_id))
+        assert await memory_datasets(
+            binding, await customer_snapshots(binding.organization_id)
+        )
         await index_repository_archive(
             _request(binding.organization_id, repo, "payment", "c" * 40),
             _repository_archive(tmp_path, "payment", "updatedpayment"),
         )
-        assert (await source_records(binding))[0].qualification == receipts[0].qualification
+        refreshed = next(
+            r
+            for r in await source_records(binding)
+            if r.source_key == receipts[0].source_key
+        )
+        assert refreshed.qualification["facts"] == receipts[0].qualification["facts"]
+        assert all(
+            s["status"] == "needs_recheck"
+            for s in refreshed.qualification["fact_states"].values()
+        )
         # A deleted file loses its live link without erasing historical memory;
         # restoring the original commit restores that exact file link, no LLM.
         import zipfile
 
         missing = tmp_path / "without-main.zip"
         with zipfile.ZipFile(missing, "w") as archive:
-            archive.writestr("payment/go.mod", "module github.com/amberlyhq/payment\n\ngo 1.24\n")
+            archive.writestr(
+                "payment/go.mod", "module github.com/amberlyhq/payment\n\ngo 1.24\n"
+            )
         before_refresh = list(calls)
         await index_repository_archive(
             _request(binding.organization_id, repo, "payment", "d" * 40), missing
         )
-        async with scoped_database_context_variables(binding.dataset_id, binding.service_user_id):
+        async with scoped_database_context_variables(
+            binding.dataset_id, binding.service_user_id
+        ):
             retained, detached = await (await get_graph_engine()).get_graph_data()
         assert any(i == fact_id for i, _ in retained)
-        assert not any(a == fact_id and r == "review_context_for" for a, b, r, _ in detached)
+        assert not any(
+            a == fact_id and r == "review_context_for" for a, b, r, _ in detached
+        )
         await index_repository_archive(
             _request(binding.organization_id, repo, "payment", "a" * 40),
             _repository_archive(tmp_path, "payment", "payment"),
         )
-        async with scoped_database_context_variables(binding.dataset_id, binding.service_user_id):
+        async with scoped_database_context_variables(
+            binding.dataset_id, binding.service_user_id
+        ):
             _, restored = await (await get_graph_engine()).get_graph_data()
         assert any(
-            a == fact_id and b in file_ids and r == "review_context_for" for a, b, r, _ in restored
+            a == fact_id and b in file_ids and r == "review_context_for"
+            for a, b, r, _ in restored
         )
         assert calls == before_refresh
         from cognee.modules.weave.recall import recall
@@ -180,13 +216,19 @@ async def test_qualified_review_uses_native_memory_and_replays_without_model_cal
 
         with monkeypatch.context() as patch:
             patch.setattr(cognee, "recall", recall_with_offline_answer)
-            recalled = await recall(binding.organization_id, RecallRequest(query="payment"))
+            recalled = await recall(
+                binding.organization_id, RecallRequest(query="payment")
+            )
         assert recalled.status == "available"
         assert "qualified_review_context" in recalled.native_memory
         assert str(fact_id) in recalled.native_memory
-        assert semantic_calls == [[binding.dataset_id]]
+        assert (
+            semantic_calls == []
+        )  # Historical review bundles are not current-source evidence.
         before = list(calls)
-        assert (await remember_review(binding.organization_id, req)).status == "unchanged"
+        assert (
+            await remember_review(binding.organization_id, req)
+        ).status == "unchanged"
         assert calls == before
         assert calls.count("KnowledgeSelection") == 2
         assert (
@@ -206,8 +248,12 @@ async def test_qualified_review_uses_native_memory_and_replays_without_model_cal
         revised = req.model_copy(
             update={"artifact_revision": 2, "content": "No durable code knowledge."}
         )
-        assert (await remember_review(binding.organization_id, revised)).status == "unchanged"
-        assert (await remember_review(binding.organization_id, revised)).status == "unchanged"
+        assert (
+            await remember_review(binding.organization_id, revised)
+        ).status == "unchanged"
+        assert (
+            await remember_review(binding.organization_id, revised)
+        ).status == "unchanged"
         assert calls.count("empty") == 1
     finally:
         await delete_organization(binding.organization_id, 1)
@@ -273,7 +319,9 @@ async def test_identical_customer_paths_and_fact_text_never_share_storage_or_lin
         raise AssertionError(cls.__name__)
 
     async def graph(binding):
-        async with scoped_database_context_variables(binding.dataset_id, binding.service_user_id):
+        async with scoped_database_context_variables(
+            binding.dataset_id, binding.service_user_id
+        ):
             return await (await get_graph_engine()).get_graph_data()
 
     try:
@@ -297,14 +345,20 @@ async def test_identical_customer_paths_and_fact_text_never_share_storage_or_lin
         )
         fact_ids = []
         for binding in (a, b):
-            assert (await remember_review(binding.organization_id, request)).status == "remember"
+            assert (
+                await remember_review(binding.organization_id, request)
+            ).status == "remember"
             nodes, edges = await graph(binding)
             props = dict(nodes)
             facts = [(i, p) for i, p in nodes if p.get("type") == "ReviewKnowledge"]
             assert len(facts) == 1
             fact_id, fact = facts[0]
             fact_ids.append(fact_id)
-            links = [(x, y) for x, y, r, _ in edges if x == fact_id and r == "review_context_for"]
+            links = [
+                (x, y)
+                for x, y, r, _ in edges
+                if x == fact_id and r == "review_context_for"
+            ]
             assert len(links) == 1
             target = props[links[0][1]]
             assert target["file_path"] == "main.go"
@@ -329,8 +383,18 @@ async def test_identical_customer_paths_and_fact_text_never_share_storage_or_lin
         ]
         assert any(p.get("github_repository_id") == sibling for _, p in nodes)
         assert before == json.dumps(await graph(b), sort_keys=True, default=str)
-        assert len(await source_records(b)) == 1
-        assert not await source_records(a)
+        assert (
+            len(
+                [
+                    r
+                    for r in await source_records(b)
+                    if r.source_key.startswith("review:qualified:")
+                ]
+            )
+            == 1
+        )
+        assert not await source_records(a, repo)
+        assert all(r.github_repository_id == sibling for r in await source_records(a))
     finally:
         await delete_organization(a.organization_id, 2)
         await delete_organization(b.organization_id, 2)

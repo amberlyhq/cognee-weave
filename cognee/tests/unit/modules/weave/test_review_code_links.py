@@ -81,3 +81,22 @@ def test_foreign_receipt_cannot_create_links(field):
     setattr(receipt, field, uuid4())
     with pytest.raises(ValueError, match="Foreign"):
         build_review_links(binding, receipt, "b" * 40, [file()])
+
+
+def test_fact_lifecycle_is_mirrored_on_node_and_link():
+    from cognee.modules.weave.review_code_links import build_review_links
+    from cognee.modules.weave.knowledge_lifecycle import fact_digest
+
+    binding, receipt, file = fixture()
+    digest = fact_digest(receipt.qualification["facts"][0])
+    receipt.qualification["fact_states"] = {
+        digest: {
+            "status": "needs_recheck",
+            "checked_sha": "a" * 40,
+            "invalidated_sha": "b" * 40,
+        }
+    }
+    nodes, edges = build_review_links(binding, receipt, "a" * 40, [file()])
+    assert nodes[0].knowledge_status == "needs_recheck"
+    assert nodes[0].checked_sha == "a" * 40
+    assert edges[0][3]["knowledge_status"] == "needs_recheck"
