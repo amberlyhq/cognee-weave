@@ -60,11 +60,13 @@ async def sync_qualified_review(binding, user, request, *, llm, embedding):
             session.add(record)
         if record.qualification is None or record.qualification["input_hash"] != input_hash:
             record.status = "qualified"
+        prior_states = (record.qualification or {}).get("fact_states", {})
         record.qualification = dict(
             version=QUALIFICATION_VERSION,
             input_hash=input_hash,
             artifact_revision=request.artifact_revision,
             facts=result.model_dump()["facts"],
+            fact_states=prior_states,
         )
         await session.commit()
     if not result.facts:

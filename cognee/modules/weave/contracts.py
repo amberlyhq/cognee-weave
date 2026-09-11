@@ -82,9 +82,13 @@ class RecallResponse(BaseModel):
     mode: RecallMode
     indexed_default_sha: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
     age_seconds: int | None = Field(default=None, ge=0)
-    repositories: list[RepositoryReference] = Field(default_factory=list, max_length=1000)
+    repositories: list[RepositoryReference] = Field(
+        default_factory=list, max_length=1000
+    )
     graph_candidates: list[RecallCandidate] = Field(default_factory=list, max_length=25)
-    vector_candidates: list[RecallCandidate] = Field(default_factory=list, max_length=25)
+    vector_candidates: list[RecallCandidate] = Field(
+        default_factory=list, max_length=25
+    )
     diagnostics: list[RecallDiagnostic] = Field(default_factory=list, max_length=5)
     native_memory: str | None = Field(default=None, max_length=64000)
 
@@ -104,7 +108,9 @@ class SurfaceResponse(BaseModel):
 
     organization_id: UUID
     surface: Literal["export", "visualization"]
-    repositories: list[RepositoryReference] = Field(default_factory=list, max_length=1000)
+    repositories: list[RepositoryReference] = Field(
+        default_factory=list, max_length=1000
+    )
     nodes: list[RecallCandidate] = Field(default_factory=list, max_length=500)
     edges: list[SurfaceEdge] = Field(default_factory=list, max_length=1000)
     native_graph: str | None = Field(default=None, max_length=1000000)
@@ -158,7 +164,9 @@ class ReviewMemoryRequest(BaseModel):
 class ReviewMemoryResponse(BaseModel):
     organization_id: UUID
     review_id: UUID
-    status: Literal["remember", "update", "unchanged", "stale_ignored", "removed_ignored"]
+    status: Literal[
+        "remember", "update", "unchanged", "stale_ignored", "removed_ignored"
+    ]
 
 
 class DeleteResponse(BaseModel):
@@ -167,3 +175,36 @@ class DeleteResponse(BaseModel):
     organization_id: UUID
     github_repository_id: int | None = None
     status: Literal["deleted"] = "deleted"
+
+
+class MergeKnowledgeChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    base_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    head_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    changed_paths: list[str] = Field(max_length=5000)
+    complete: bool
+    review_context: str = Field(default="", max_length=48000)
+
+    @model_validator(mode="after")
+    def safe_paths(self):
+        from cognee.modules.weave.archive import _safe_relative_path
+
+        for path in self.changed_paths:
+            if len(path) > 1024 or any(p in {"", ".", ".."} for p in path.split("/")):
+                raise ValueError("Invalid changed path")
+            _safe_relative_path(path)
+        if len(set(self.changed_paths)) != len(self.changed_paths):
+            raise ValueError("Duplicate changed paths")
+        return self
+
+
+class MergeMemoryResponse(BaseModel):
+    organization_id: UUID
+    github_repository_id: int
+    head_sha: str
+    status: Literal["completed", "unchanged", "stale_ignored", "pending"]
+    facts_saved: int = 0
+    facts_rechecked: int = 0
+    facts_superseded: int = 0
+    facts_unverified: int = 0
+    coverage_complete: bool = False

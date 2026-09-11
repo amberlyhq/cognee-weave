@@ -42,7 +42,9 @@ def _request(organization_id, repository_id, name, sha):
 
 
 @pytest.mark.asyncio
-async def test_exact_sha_indexing_keeps_two_repositories_and_a_tenant_canary_isolated(tmp_path):
+async def test_exact_sha_indexing_keeps_two_repositories_and_a_tenant_canary_isolated(
+    tmp_path,
+):
     from uuid import uuid4
 
     from cognee.context_global_variables import scoped_database_context_variables
@@ -50,7 +52,10 @@ async def test_exact_sha_indexing_keeps_two_repositories_and_a_tenant_canary_iso
     from cognee.modules.weave.deletion import delete_organization, export_organization
     from cognee.modules.weave.indexing import index_repository_archive
     from cognee.modules.weave.memory_sources import source_records
-    from cognee.modules.weave.native_memory import NATIVE_PIPELINE_VERSION, customer_dataset
+    from cognee.modules.weave.native_memory import (
+        NATIVE_PIPELINE_VERSION,
+        customer_dataset,
+    )
     from cognee.modules.weave.organizations import provision_organization
 
     a, b = await provision_organization(uuid4()), await provision_organization(uuid4())
@@ -68,7 +73,9 @@ async def test_exact_sha_indexing_keeps_two_repositories_and_a_tenant_canary_iso
         dataset = await customer_dataset(binding)
         assert dataset.id == binding.dataset_id
         seen.append(dataset.id)
-        async with scoped_database_context_variables(dataset.id, binding.service_user_id):
+        async with scoped_database_context_variables(
+            dataset.id, binding.service_user_id
+        ):
             graph = await get_graph_engine()
             nodes, edges = await graph.get_graph_data()
             assert nodes and edges
@@ -78,11 +85,15 @@ async def test_exact_sha_indexing_keeps_two_repositories_and_a_tenant_canary_iso
                 and p.get("github_repository_id") == repo
                 for _, p in nodes
             )
-            assert any("Message" in properties.get("name", "") for _, properties in nodes)
+            assert any(
+                "Message" in properties.get("name", "") for _, properties in nodes
+            )
         surface = await export_organization(binding.organization_id, [repo])
         assert (
             next(
-                item for item in surface.repositories if item.github_repository_id == repo
+                item
+                for item in surface.repositories
+                if item.github_repository_id == repo
             ).indexed_default_sha
             == sha
         )
@@ -96,7 +107,9 @@ async def test_exact_sha_indexing_keeps_two_repositories_and_a_tenant_canary_iso
 
 
 @pytest.mark.asyncio
-async def test_code_import_never_calls_memory_or_embedding_models(tmp_path, monkeypatch):
+async def test_code_import_never_calls_memory_or_embedding_models(
+    tmp_path, monkeypatch
+):
     from uuid import uuid4
     import cognee
     from cognee.infrastructure.llm.LLMGateway import LLMGateway
@@ -117,7 +130,9 @@ async def test_code_import_never_calls_memory_or_embedding_models(tmp_path, monk
     archive = _repository_archive(tmp_path, "code-only", "payment")
     with zipfile.ZipFile(archive, "a") as contents:
         contents.writestr("code-only/README.md", "Do not enrich this document")
-        contents.writestr("code-only/screenshot.png", b"invalid-image-should-never-be-loaded")
+        contents.writestr(
+            "code-only/screenshot.png", b"invalid-image-should-never-be-loaded"
+        )
     monkeypatch.setattr(cognee, "improve", forbidden)
     monkeypatch.setattr(LLMGateway, "acreate_structured_output", forbidden)
     await index_repository_archive(
@@ -144,11 +159,16 @@ async def test_return_to_previous_commit_restores_native_sources(tmp_path):
 
     binding = await provision_organization(uuid4())
     repo = 920020
-    requests = [_request(binding.organization_id, repo, "returning", sha * 40) for sha in "ab"]
+    requests = [
+        _request(binding.organization_id, repo, "returning", sha * 40) for sha in "ab"
+    ]
     paths = [tmp_path / label for label in "ab"]
     for path in paths:
         path.mkdir()
-    archives = [_repository_archive(path, "returning", label) for path, label in zip(paths, "ab")]
+    archives = [
+        _repository_archive(path, "returning", label)
+        for path, label in zip(paths, "ab")
+    ]
 
     async def receipt():
         from cognee.context_global_variables import scoped_database_context_variables
@@ -156,9 +176,13 @@ async def test_return_to_previous_commit_restores_native_sources(tmp_path):
         from cognee.modules.weave.native_memory import customer_dataset
 
         dataset = await customer_dataset(binding)
-        async with scoped_database_context_variables(dataset.id, binding.service_user_id):
+        async with scoped_database_context_variables(
+            dataset.id, binding.service_user_id
+        ):
             nodes, _ = await (await get_graph_engine()).get_graph_data()
-        return {p["name"].split(".")[-1] for _, p in nodes if p.get("type") == "CodeSymbol"}
+        return {
+            p["name"].split(".")[-1] for _, p in nodes if p.get("type") == "CodeSymbol"
+        }
 
     try:
         first = await index_repository_archive(requests[0], archives[0])
@@ -211,7 +235,9 @@ async def test_directory_migration_preserves_review_and_sibling_source_data(tmp_
         (920031, "doc:sibling", "sibling source"),
         (920030, "review:" + str(uuid4()), "saved historical review"),
     ]
-    ids = [source_data_id(binding.organization_id, repo, key) for repo, key, _ in records]
+    ids = [
+        source_data_id(binding.organization_id, repo, key) for repo, key, _ in records
+    ]
     try:
         # Seed through native remember so the fixture has the same graph
         # provenance marker as the already-indexed V2 staging dataset.
@@ -220,7 +246,9 @@ async def test_directory_migration_preserves_review_and_sibling_source_data(tmp_
         (baseline / "go.mod").write_text("module example.com/legacy\n\ngo 1.24\n")
         (baseline / "main.go").write_text("package main\nfunc Legacy() {}\n")
         async with scoped_database_context_variables(binding.dataset_id, user.id):
-            await cognee.remember(str(baseline), dataset_id=binding.dataset_id, user=user)
+            await cognee.remember(
+                str(baseline), dataset_id=binding.dataset_id, user=user
+            )
         async with get_relational_engine().get_async_session() as session:
             legacy_code_id = await session.scalar(
                 select(Data.id).where(Data.dataset_id == binding.dataset_id)
@@ -237,7 +265,9 @@ async def test_directory_migration_preserves_review_and_sibling_source_data(tmp_
         # Stamp graph facts with the same native ownership used by cognify.
         # Migration must remove only the old repository's facts.
         from cognee.infrastructure.databases.graph import get_graph_engine
-        from cognee.infrastructure.databases.provenance.source_refs import make_source_ref_key
+        from cognee.infrastructure.databases.provenance.source_refs import (
+            make_source_ref_key,
+        )
 
         canaries = [str(uuid4()) for _ in ids]
         async with scoped_database_context_variables(binding.dataset_id, user.id):
@@ -276,9 +306,21 @@ async def test_directory_migration_preserves_review_and_sibling_source_data(tmp_
             _repository_archive(tmp_path, "migration", "migration"),
         )
         async with get_relational_engine().get_async_session() as session:
-            remaining = set(await session.scalars(select(Data.id).where(Data.id.in_(ids))))
+            remaining = set(
+                await session.scalars(select(Data.id).where(Data.id.in_(ids)))
+            )
         assert remaining == {ids[1], ids[2]}
-        assert {r.data_id for r in await source_records(binding)} == remaining
+        assert {
+            r.data_id
+            for r in await source_records(binding)
+            if not r.source_key.startswith("review:code-change:")
+        } == remaining
+        changes = [
+            r
+            for r in await source_records(binding)
+            if r.source_key.startswith("review:code-change:")
+        ]
+        assert len(changes) == 1 and changes[0].qualification["facts"] == []
         async with scoped_database_context_variables(binding.dataset_id, user.id):
             graph = await get_graph_engine()
             nodes, _ = await graph.get_graph_data()
@@ -290,7 +332,9 @@ async def test_directory_migration_preserves_review_and_sibling_source_data(tmp_
 
 
 @pytest.mark.asyncio
-async def test_config_file_anchor_follows_snapshot_even_when_parsed_code_is_unchanged(tmp_path):
+async def test_config_file_anchor_follows_snapshot_even_when_parsed_code_is_unchanged(
+    tmp_path,
+):
     from uuid import uuid4
     from cognee.context_global_variables import scoped_database_context_variables
     from cognee.infrastructure.databases.graph import get_graph_engine
@@ -306,14 +350,18 @@ async def test_config_file_anchor_follows_snapshot_even_when_parsed_code_is_unch
         await index_repository_archive(
             _request(binding.organization_id, 920050, "config", "a" * 40), first
         )
-        async with scoped_database_context_variables(binding.dataset_id, binding.service_user_id):
+        async with scoped_database_context_variables(
+            binding.dataset_id, binding.service_user_id
+        ):
             nodes, _ = await (await get_graph_engine()).get_graph_data()
         assert any(p.get("file_path") == "settings.yaml" for _, p in nodes)
         second = _repository_archive(tmp_path, "config", "payment")
         await index_repository_archive(
             _request(binding.organization_id, 920050, "config", "b" * 40), second
         )
-        async with scoped_database_context_variables(binding.dataset_id, binding.service_user_id):
+        async with scoped_database_context_variables(
+            binding.dataset_id, binding.service_user_id
+        ):
             nodes, _ = await (await get_graph_engine()).get_graph_data()
         assert not any(p.get("file_path") == "settings.yaml" for _, p in nodes)
         assert all(p.get("indexed_sha") == "b" * 40 for _, p in nodes)

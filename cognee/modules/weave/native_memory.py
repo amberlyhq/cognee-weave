@@ -15,7 +15,7 @@ from cognee.modules.users.methods import get_user
 from cognee.modules.weave.config import get_weave_embedding_config, get_weave_llm_config
 from cognee.modules.weave.scope import native_organization
 
-NATIVE_PIPELINE_VERSION = "weave-native-memory.v5"
+NATIVE_PIPELINE_VERSION = "weave-native-memory.v6"
 
 
 async def customer_dataset(binding):
@@ -61,9 +61,9 @@ async def repository_dataset(binding, repository_id: int, *, legacy: bool = Fals
             select(Dataset).where(
                 Dataset.name
                 == (
-                    repository_dataset_name(binding.organization_id, repository_id).removesuffix(
-                        "-code-v1"
-                    )
+                    repository_dataset_name(
+                        binding.organization_id, repository_id
+                    ).removesuffix("-code-v1")
                     if legacy
                     else repository_dataset_name(binding.organization_id, repository_id)
                 ),
@@ -73,7 +73,9 @@ async def repository_dataset(binding, repository_id: int, *, legacy: bool = Fals
         )
 
 
-async def forget_repository(binding, repository_id: int, *, preserve_reviews: bool = False) -> None:
+async def forget_repository(
+    binding, repository_id: int, *, preserve_reviews: bool = False
+) -> None:
     from cognee.modules.weave.memory_sources import forget_source, source_records
 
     user = await get_user(binding.service_user_id)
@@ -164,9 +166,26 @@ async def remember_repository(binding, request, repository):
         for p in repository.rglob("*")
         if p.is_file() and not p.is_symlink()
     )
+    import hashlib
+
+    file_hashes = {
+        path: hashlib.sha256((repository / path).read_bytes()).hexdigest()
+        for path in paths
+    }
     token = native_organization.set(binding.organization_id)
     try:
         async with scoped_database_context_variables(dataset.id, user.id):
+            from cognee.modules.weave.knowledge_lifecycle import (
+                invalidate_changed_knowledge,
+                stamp_file_hashes,
+            )
+
+            await invalidate_changed_knowledge(
+                binding,
+                request.github_repository_id,
+                request.requested_sha,
+                file_hashes,
+            )
             result = await cognee.remember(
                 str(repository),
                 dataset_id=dataset.id,
@@ -182,6 +201,7 @@ async def remember_repository(binding, request, repository):
             from cognee.modules.weave.review_code_links import sync_review_code_links
 
             await sync_code_files(binding, repository_provenance(request), paths)
+            await stamp_file_hashes(binding, request.github_repository_id, file_hashes)
             await sync_review_code_links(binding, request.github_repository_id)
             return result
     finally:
@@ -222,7 +242,9 @@ async def recall_repository_memory(organization_id, request):
     # behind a long-running index or deletion of the customer dataset.
     async with weave_operation_lock(organization_id, wait=False) as acquired:
         if not acquired:
-            return _unavailable(organization_id, request, "unavailable", "backend_unavailable")
+            return _unavailable(
+                organization_id, request, "unavailable", "backend_unavailable"
+            )
         binding = await get_organization_binding(organization_id)
         if binding is None:
             return _unavailable(
@@ -232,16 +254,22 @@ async def recall_repository_memory(organization_id, request):
         # every repository receipt, including incomplete first-time indexes.
         records = await customer_snapshots(organization_id)
         if not snapshots_ready(records):
-            return _unavailable(organization_id, request, "unavailable", "no_indexed_repository")
+            return _unavailable(
+                organization_id, request, "unavailable", "no_indexed_repository"
+            )
         selected = {record.github_repository_id for record in records}
         required = set(request.github_repository_ids)
         if request.primary_github_repository_id is not None:
             required.add(request.primary_github_repository_id)
         if not required.issubset(selected):
-            return _unavailable(organization_id, request, "unavailable", "no_indexed_repository")
+            return _unavailable(
+                organization_id, request, "unavailable", "no_indexed_repository"
+            )
         datasets = await memory_datasets(binding, records)
         if not datasets:
-            return _unavailable(organization_id, request, "unavailable", "no_indexed_repository")
+            return _unavailable(
+                organization_id, request, "unavailable", "no_indexed_repository"
+            )
         user = await get_user(binding.service_user_id)
         code_datasets = datasets
         # Code navigation works immediately and never invokes an LLM or embeddings.
@@ -275,31 +303,31 @@ async def recall_repository_memory(organization_id, request):
         linked = await linked_review_context(binding, result, sources, request.top_k)
         if linked:
             result += [{"qualified_review_context": linked}]
-        completed = {
-            source.dataset_id or binding.dataset_id
-            for source in sources
-            if source.status == "completed"
-        }
-        pending = {
-            source.dataset_id or binding.dataset_id
-            for source in sources
-            if source.status != "completed"
-        }
-        semantic = [dataset.id for dataset in datasets if dataset.id in completed - pending]
+        from cognee.modules.weave.memory_retrieval import (
+            eligible_memory_sources,
+            recall_current_memory,
+        )
+
+        semantic = eligible_memory_sources(binding, sources, required)
         diagnostics = []
         if semantic:
             try:
                 embedding, llm = get_weave_embedding_config(), get_weave_llm_config()
                 async with scoped_database_context_variables(
-                    semantic[0], user.id, llm_config=llm, embedding_config=embedding
+                    binding.dataset_id,
+                    user.id,
+                    llm_config=llm,
+                    embedding_config=embedding,
                 ):
-                    result += await cognee.recall(
+                    result += await recall_current_memory(
+                        binding,
+                        user,
                         request.query,
-                        dataset_ids=semantic,
-                        user=user,
+                        semantic,
+                        repository_ids=required,
                         top_k=request.top_k,
-                        llm_config=llm,
-                        embedding_config=embedding,
+                        llm=llm,
+                        embedding=embedding,
                     )
             except Exception:
                 # Advisory paid memory must not discard successful code navigation.

@@ -9,14 +9,20 @@ import pytest
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["completed", "failed"])
-async def test_repository_uses_one_native_directory_operation(tmp_path, monkeypatch, status):
+async def test_repository_uses_one_native_directory_operation(
+    tmp_path, monkeypatch, status
+):
     import cognee
     from cognee.modules.weave import native_memory, memory_sources, repository_sources
     import importlib
 
-    creation = importlib.import_module("cognee.modules.data.methods.create_authorized_dataset")
+    creation = importlib.import_module(
+        "cognee.modules.data.methods.create_authorized_dataset"
+    )
 
-    binding = SimpleNamespace(organization_id=uuid4(), dataset_id=uuid4(), service_user_id=uuid4())
+    binding = SimpleNamespace(
+        organization_id=uuid4(), dataset_id=uuid4(), service_user_id=uuid4()
+    )
     user = SimpleNamespace(id=binding.service_user_id, tenant_id=uuid4())
     dataset = SimpleNamespace(id=binding.dataset_id)
     request = SimpleNamespace(
@@ -80,6 +86,17 @@ async def test_repository_uses_one_native_directory_operation(tmp_path, monkeypa
     async def no_graph(*args, **kwargs):
         return None
 
+    from cognee.modules.weave import knowledge_lifecycle
+
+    async def invalidate(*args):
+        calls.append("invalidate")
+        assert set(args[3]) == {"package.json", "index.js", "README.md"}
+
+    async def stamp(*args):
+        calls.append("stamp")
+
+    monkeypatch.setattr(knowledge_lifecycle, "invalidate_changed_knowledge", invalidate)
+    monkeypatch.setattr(knowledge_lifecycle, "stamp_file_hashes", stamp)
     monkeypatch.setattr(code_files, "sync_code_files", no_graph)
     monkeypatch.setattr(review_code_links, "sync_review_code_links", no_graph)
     monkeypatch.setattr(native_memory, "get_user", get_user)
@@ -88,9 +105,13 @@ async def test_repository_uses_one_native_directory_operation(tmp_path, monkeypa
     monkeypatch.setattr(native_memory, "_forget_dataset", forget)
     monkeypatch.setattr(native_memory, "scoped_database_context_variables", scope)
     monkeypatch.setattr(native_memory, "get_weave_llm_config", lambda: "llm")
-    monkeypatch.setattr(native_memory, "get_weave_embedding_config", lambda: "embedding")
+    monkeypatch.setattr(
+        native_memory, "get_weave_embedding_config", lambda: "embedding"
+    )
     monkeypatch.setattr(creation, "create_authorized_dataset", forbidden)
-    monkeypatch.setattr(repository_sources, "prepare_repository_sources", prepared, raising=False)
+    monkeypatch.setattr(
+        repository_sources, "prepare_repository_sources", prepared, raising=False
+    )
     monkeypatch.setattr(memory_sources, "source_records", no_records)
     monkeypatch.setattr(memory_sources, "sync_source", forbidden)
     monkeypatch.setattr(cognee, "remember", remember)
@@ -99,4 +120,8 @@ async def test_repository_uses_one_native_directory_operation(tmp_path, monkeypa
             await native_memory.remember_repository(binding, request, repository)
     else:
         await native_memory.remember_repository(binding, request, repository)
-    assert calls == ["remember"]
+    assert calls == (
+        ["invalidate", "remember"]
+        if status == "failed"
+        else ["invalidate", "remember", "stamp"]
+    )

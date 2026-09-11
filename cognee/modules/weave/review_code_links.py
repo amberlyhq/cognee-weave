@@ -26,6 +26,10 @@ class ReviewKnowledge(DataPoint):
     statement: str
     certainty: str
     historical: bool = True
+    knowledge_status: str = "historical"
+    checked_sha: str | None = None
+    invalidated_sha: str | None = None
+    replacement_source: str | None = None
     organization_id: UUID
     github_repository_id: int
     source_key: str
@@ -40,11 +44,18 @@ class ReviewKnowledge(DataPoint):
 async def forget_review_code_links(binding, record):
     if record.qualification is None:
         return
-    if record.organization_id != binding.organization_id or record.dataset_id != binding.dataset_id:
+    if (
+        record.organization_id != binding.organization_id
+        or record.dataset_id != binding.dataset_id
+    ):
         raise ValueError("Foreign review receipt")
-    async with scoped_database_context_variables(binding.dataset_id, binding.service_user_id):
+    async with scoped_database_context_variables(
+        binding.dataset_id, binding.service_user_id
+    ):
         graph = await get_graph_engine()
-        nodes, _ = await graph.get_filtered_graph_data([{"type": ["ReviewKnowledge"]}], max_edges=0)
+        nodes, _ = await graph.get_filtered_graph_data(
+            [{"type": ["ReviewKnowledge"]}], max_edges=0
+        )
         await graph.delete_nodes(
             [
                 str(i)
@@ -77,12 +88,20 @@ def build_review_links(binding, receipt, head_sha, code_nodes):
             files.setdefault(props.get("file_path"), []).append((str(node_id), props))
     nodes, edges = [], []
     for fact in facts:
-        digest = hashlib.sha256(json.dumps(fact.model_dump(), sort_keys=True).encode()).hexdigest()
+        digest = hashlib.sha256(
+            json.dumps(fact.model_dump(), sort_keys=True).encode()
+        ).hexdigest()
+        state = receipt.qualification.get("fact_states", {}).get(digest, {})
         node = ReviewKnowledge(
             id=uuid5(
                 binding.organization_id,
                 f"review-fact.v1:{receipt.github_repository_id}:{receipt.source_key}:{digest}",
             ),
+            knowledge_status=state.get("status", "historical"),
+            historical=state.get("status") != "current",
+            checked_sha=state.get("checked_sha"),
+            invalidated_sha=state.get("invalidated_sha"),
+            replacement_source=state.get("replacement_source"),
             name=fact.statement,
             statement=fact.statement,
             certainty=fact.certainty,
@@ -96,27 +115,34 @@ def build_review_links(binding, receipt, head_sha, code_nodes):
             evidence=[e.model_dump() for e in fact.evidence],
         )
         nodes.append(node)
-        # Ambiguity is not permission to guess a file identity.
-        matches = files.get(fact.code_path, [])
-        if len(matches) == 1:
-            target, props = matches[0]
-            edges.append(
-                (
-                    str(node.id),
-                    target,
-                    "review_context_for",
-                    {
-                        "edge_text": fact.statement,
-                        "certainty": fact.certainty,
-                        "historical": True,
-                        "reviewed_head_sha": head_sha,
-                        "indexed_sha": props.get("indexed_sha"),
-                        "organization_id": str(binding.organization_id),
-                        "github_repository_id": receipt.github_repository_id,
-                        "code_path": fact.code_path,
-                    },
+        # Every extra path comes from server-attached merged-source evidence.
+        linked_paths = {fact.code_path} | {
+            receipt.qualification.get("evidence_paths", {}).get(e.evidence_id)
+            for e in fact.evidence
+        }
+        for path in sorted(p for p in linked_paths if p):
+            matches = files.get(path, [])
+            if len(matches) == 1:
+                target, props = matches[0]
+                edges.append(
+                    (
+                        str(node.id),
+                        target,
+                        "review_context_for",
+                        {
+                            "edge_text": fact.statement,
+                            "certainty": fact.certainty,
+                            "historical": node.historical,
+                            "knowledge_status": node.knowledge_status,
+                            "checked_sha": node.checked_sha,
+                            "reviewed_head_sha": head_sha,
+                            "indexed_sha": props.get("indexed_sha"),
+                            "organization_id": str(binding.organization_id),
+                            "github_repository_id": receipt.github_repository_id,
+                            "code_path": path,
+                        },
+                    )
                 )
-            )
     return nodes, edges
 
 
@@ -126,8 +152,12 @@ async def sync_review_code_links(binding, repository_id=None):
     if await customer_dataset(binding) is None:
         raise ValueError("Foreign or missing customer dataset")
     records = await source_records(binding, repository_id)
-    records = [r for r in records if r.qualification is not None and r.status == "completed"]
-    async with scoped_database_context_variables(binding.dataset_id, binding.service_user_id):
+    records = [
+        r for r in records if r.qualification is not None and r.status == "completed"
+    ]
+    async with scoped_database_context_variables(
+        binding.dataset_id, binding.service_user_id
+    ):
         graph = await get_graph_engine()
         existing, _ = await graph.get_filtered_graph_data(
             [{"type": ["CodeFileReference", "ReviewKnowledge"]}], max_edges=0
@@ -162,11 +192,19 @@ async def sync_review_code_links(binding, repository_id=None):
             ):
                 raise ValueError("Foreign or missing qualified source data")
             metadata = data.external_metadata or {}
-            if metadata.get("github_repository_id") != record.github_repository_id or metadata.get(
-                "review_id"
-            ) != record.source_key.removeprefix("review:qualified:"):
+            expected_key = (
+                "review:merge:" + str(metadata.get("merge_source"))
+                if metadata.get("memory_kind") == "qualified_merge"
+                else "review:qualified:" + str(metadata.get("review_id"))
+            )
+            if (
+                metadata.get("github_repository_id") != record.github_repository_id
+                or expected_key != record.source_key
+            ):
                 raise ValueError("Qualified source identity mismatch")
-            nodes, edges = build_review_links(binding, record, metadata.get("head_sha"), existing)
+            nodes, edges = build_review_links(
+                binding, record, metadata.get("head_sha"), existing
+            )
             desired = {str(n.id) for n in nodes}
             await graph.delete_nodes([i for i in prior if i not in desired])
             ref = make_source_ref_key(binding.dataset_id, data.id)
@@ -179,7 +217,8 @@ async def sync_review_code_links(binding, repository_id=None):
                 [
                     EdgeIdentity(e.source_id, e.target_id, e.relationship_name)
                     for e in old_edges
-                    if e.relationship_name == "review_context_for" and e.source_id in desired
+                    if e.relationship_name == "review_context_for"
+                    and e.source_id in desired
                 ]
             )
             await graph.add_edges(edges, source_ref_key=ref)
@@ -192,7 +231,11 @@ async def sync_review_code_links(binding, repository_id=None):
                         str(n.id),
                         str(chunk),
                         "supported_by",
-                        {"historical": True, "certainty": n.certainty},
+                        {
+                            "historical": n.historical,
+                            "certainty": n.certainty,
+                            "knowledge_status": n.knowledge_status,
+                        },
                     )
                     for n in nodes
                     for chunk in chunks
@@ -239,7 +282,9 @@ async def linked_review_context(binding, code_result, records, limit):
         and r.organization_id == binding.organization_id
         and r.dataset_id == binding.dataset_id
     }
-    async with scoped_database_context_variables(binding.dataset_id, binding.service_user_id):
+    async with scoped_database_context_variables(
+        binding.dataset_id, binding.service_user_id
+    ):
         graph = await get_graph_engine()
         selected = await graph.get_nodes(sorted(ids))
         files = {
@@ -260,8 +305,11 @@ async def linked_review_context(binding, code_result, records, limit):
                 or b not in files
                 or fact.get("type") != "ReviewKnowledge"
                 or str(fact.get("organization_id")) != str(binding.organization_id)
-                or fact.get("github_repository_id") != files[b].get("github_repository_id")
-                or completed.get((fact.get("github_repository_id"), fact.get("source_key")))
+                or fact.get("github_repository_id")
+                != files[b].get("github_repository_id")
+                or completed.get(
+                    (fact.get("github_repository_id"), fact.get("source_key"))
+                )
                 != fact.get("artifact_revision")
             ):
                 continue
@@ -271,6 +319,10 @@ async def linked_review_context(binding, code_result, records, limit):
                     "statement",
                     "certainty",
                     "historical",
+                    "knowledge_status",
+                    "checked_sha",
+                    "invalidated_sha",
+                    "replacement_source",
                     "github_repository_id",
                     "code_path",
                     "reviewed_head_sha",
@@ -278,5 +330,36 @@ async def linked_review_context(binding, code_result, records, limit):
                     "evidence",
                 )
             }
-            output[a].update(fact_id=a, code_file_id=b, indexed_sha=files[b].get("indexed_sha"))
+            receipt = next(
+                r
+                for r in records
+                if r.github_repository_id == fact["github_repository_id"]
+                and r.source_key == fact["source_key"]
+            )
+            from cognee.modules.weave.knowledge_lifecycle import fact_digest
+
+            stored_fact = next(
+                (
+                    f
+                    for f in receipt.qualification["facts"]
+                    if f["statement"] == fact["statement"]
+                    and f["code_path"] == fact["code_path"]
+                ),
+                None,
+            )
+            if stored_fact is None:
+                continue
+            state = receipt.qualification.get("fact_states", {}).get(
+                fact_digest(stored_fact), {}
+            )
+            output[a].update(
+                knowledge_status=state.get("status", "historical"),
+                historical=state.get("status") != "current",
+                checked_sha=state.get("checked_sha"),
+                invalidated_sha=state.get("invalidated_sha"),
+                replacement_source=state.get("replacement_source"),
+            )
+            output[a].update(
+                fact_id=a, code_file_id=b, indexed_sha=files[b].get("indexed_sha")
+            )
         return [output[key] for key in sorted(output)[:limit]]
