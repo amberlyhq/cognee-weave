@@ -17,7 +17,7 @@ async def test_native_review_learning_retries_and_survives_code_refresh(tmp_path
     from cognee.infrastructure.session.get_session_manager import get_session_manager
     from cognee.modules.weave.contracts import ReviewMemoryRequest
     from cognee.modules.weave.organizations import provision_organization
-    from cognee.modules.weave.native_memory import repository_dataset
+    from cognee.modules.weave.native_memory import customer_dataset
     from cognee.modules.weave.indexing import index_repository_archive, weave_operation_lock
     from cognee.modules.weave.review_sessions import sync_review_session, session_identity
     from cognee.modules.weave.config import get_weave_llm_config, get_weave_embedding_config
@@ -37,7 +37,7 @@ async def test_native_review_learning_retries_and_survives_code_refresh(tmp_path
     await index_repository_archive(
         _request(binding.organization_id, repo, "payment", "a" * 40), first
     )
-    dataset = await repository_dataset(binding, repo)
+    dataset = await customer_dataset(binding)
     request = ReviewMemoryRequest(
         github_repository_id=repo,
         review_id=uuid4(),
@@ -190,7 +190,7 @@ async def test_native_review_learning_retries_and_survives_code_refresh(tmp_path
             await index_repository_archive(
                 _request(binding.organization_id, repo, "payment", sha * 40), archive
             )
-            assert (await repository_dataset(binding, repo)).id == dataset.id
+            assert (await customer_dataset(binding)).id == dataset.id
             current, _ = await graph_state()
             assert lesson_ids.issubset({node_id for node_id, _ in current})
         assert len(calls) == before  # code refreshes do not revisit memory models

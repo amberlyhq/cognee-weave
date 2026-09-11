@@ -158,12 +158,16 @@ async def forget_source(binding, user, record):
         await session.commit()
     if record.session_id:
         from cognee.infrastructure.session.get_session_manager import get_session_manager
+
         manager = get_session_manager(dataset_id=record.dataset_id)
         if not manager.is_available:
             raise RuntimeError("Native session cache is unavailable during deletion")
         await manager.delete_session(user_id=str(user.id), session_id=record.session_id)
     else:
         await cognee.forget(data_id=record.data_id, dataset_id=binding.dataset_id, user=user)
+    from cognee.modules.weave.review_code_links import forget_review_code_links
+
+    await forget_review_code_links(binding, record)
     async with get_relational_engine().get_async_session() as session:
         await set_weave_organization_scope(session, binding.organization_id)
         current = await session.get(WeaveMemorySource, identity)

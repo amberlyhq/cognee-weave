@@ -67,6 +67,9 @@ async def remember_review(organization_id, request):
                 action = await sync_qualified_review(
                     binding, user, request, llm=llm, embedding=embedding
                 )
+                from cognee.modules.weave.review_code_links import sync_review_code_links
+
+                await sync_review_code_links(binding, request.github_repository_id)
         finally:
             native_organization.reset(token)
         return ReviewMemoryResponse(

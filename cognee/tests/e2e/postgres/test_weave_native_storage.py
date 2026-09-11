@@ -50,7 +50,8 @@ async def test_native_forget_removes_only_the_bound_repository_dataset():
         datasets.append(dataset)
 
     engine = get_relational_engine()
-    # Native inspection includes repository datasets and the separate review dataset.
+    # Native inspection now serves only the primary customer dataset. Legacy
+    # datasets remain cleanup targets until explicitly migrated.
     async with scoped_database_context_variables(a.dataset_id, a.service_user_id):
         graph = await get_graph_engine()
         await graph.add_nodes([(str(uuid4()), {"name": "primary memory", "type": "Entity"})])
@@ -74,13 +75,9 @@ async def test_native_forget_removes_only_the_bound_repository_dataset():
     surface = await visualize_organization(a.organization_id, [42])
     assert not surface.nodes  # Do not pretend native entities are verified symbols.
     native = json.loads(surface.native_graph)
-    assert {properties["name"] for _, properties in native[0]["nodes"]} == {
-        "tenant canary",
-        "native summary",
-    }
-    assert {properties["name"] for _, properties in native[1]["nodes"]} == {"primary memory"}
-    assert native[0]["dataset_id"] == str(datasets[0].id)
-    assert native[1]["dataset_id"] == str(a.dataset_id)
+    assert len(native) == 1
+    assert {properties["name"] for _, properties in native[0]["nodes"]} == {"primary memory"}
+    assert native[0]["dataset_id"] == str(a.dataset_id)
     assert surface.repositories[0].indexed_default_sha == "a" * 40
     with pytest.raises(Exception, match="Bound native Weave dataset not found"):
         async with engine.get_async_session() as session:

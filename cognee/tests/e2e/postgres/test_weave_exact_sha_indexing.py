@@ -50,7 +50,7 @@ async def test_exact_sha_indexing_keeps_two_repositories_and_a_tenant_canary_iso
     from cognee.modules.weave.deletion import delete_organization, export_organization
     from cognee.modules.weave.indexing import index_repository_archive
     from cognee.modules.weave.memory_sources import source_records
-    from cognee.modules.weave.native_memory import NATIVE_PIPELINE_VERSION, repository_dataset
+    from cognee.modules.weave.native_memory import NATIVE_PIPELINE_VERSION, customer_dataset
     from cognee.modules.weave.organizations import provision_organization
 
     a, b = await provision_organization(uuid4()), await provision_organization(uuid4())
@@ -65,13 +65,19 @@ async def test_exact_sha_indexing_keeps_two_repositories_and_a_tenant_canary_iso
         first = await index_repository_archive(request, archive)
         duplicate = await index_repository_archive(request, archive)
         assert first.id == duplicate.id
-        dataset = await repository_dataset(binding, repo)
-        assert dataset.id != binding.dataset_id
+        dataset = await customer_dataset(binding)
+        assert dataset.id == binding.dataset_id
         seen.append(dataset.id)
         async with scoped_database_context_variables(dataset.id, binding.service_user_id):
             graph = await get_graph_engine()
             nodes, edges = await graph.get_graph_data()
             assert nodes and edges
+            assert any(
+                p.get("type") == "CodeRepository"
+                and str(p.get("organization_id")) == str(binding.organization_id)
+                and p.get("github_repository_id") == repo
+                for _, p in nodes
+            )
             assert any("Message" in properties.get("name", "") for _, properties in nodes)
         surface = await export_organization(binding.organization_id, [repo])
         assert (
@@ -82,7 +88,7 @@ async def test_exact_sha_indexing_keeps_two_repositories_and_a_tenant_canary_iso
         )
         assert first.request.pipeline_version == NATIVE_PIPELINE_VERSION
         assert surface.native_graph
-    assert len(set(seen)) == 3
+    assert seen[0] == seen[1] and seen[2] != seen[0]
     assert not await source_records(a, 920003)
     assert not await source_records(b, 920001)
     await delete_organization(a.organization_id, 1)
@@ -147,9 +153,9 @@ async def test_return_to_previous_commit_restores_native_sources(tmp_path):
     async def receipt():
         from cognee.context_global_variables import scoped_database_context_variables
         from cognee.infrastructure.databases.graph import get_graph_engine
-        from cognee.modules.weave.native_memory import repository_dataset
+        from cognee.modules.weave.native_memory import customer_dataset
 
-        dataset = await repository_dataset(binding, repo)
+        dataset = await customer_dataset(binding)
         async with scoped_database_context_variables(dataset.id, binding.service_user_id):
             nodes, _ = await (await get_graph_engine()).get_graph_data()
         return {p["name"].split(".")[-1] for _, p in nodes if p.get("type") == "CodeSymbol"}
@@ -279,5 +285,37 @@ async def test_directory_migration_preserves_review_and_sibling_source_data(tmp_
             surviving_nodes = {str(node_id) for node_id, _ in nodes}
         assert canaries[0] not in surviving_nodes
         assert set(canaries[1:]) <= surviving_nodes
+    finally:
+        await delete_organization(binding.organization_id, 1)
+
+
+@pytest.mark.asyncio
+async def test_config_file_anchor_follows_snapshot_even_when_parsed_code_is_unchanged(tmp_path):
+    from uuid import uuid4
+    from cognee.context_global_variables import scoped_database_context_variables
+    from cognee.infrastructure.databases.graph import get_graph_engine
+    from cognee.modules.weave.organizations import provision_organization
+    from cognee.modules.weave.indexing import index_repository_archive
+    from cognee.modules.weave.deletion import delete_organization
+
+    binding = await provision_organization(uuid4())
+    try:
+        first = _repository_archive(tmp_path, "config", "payment")
+        with zipfile.ZipFile(first, "a") as archive:
+            archive.writestr("config/settings.yaml", "retries: 2")
+        await index_repository_archive(
+            _request(binding.organization_id, 920050, "config", "a" * 40), first
+        )
+        async with scoped_database_context_variables(binding.dataset_id, binding.service_user_id):
+            nodes, _ = await (await get_graph_engine()).get_graph_data()
+        assert any(p.get("file_path") == "settings.yaml" for _, p in nodes)
+        second = _repository_archive(tmp_path, "config", "payment")
+        await index_repository_archive(
+            _request(binding.organization_id, 920050, "config", "b" * 40), second
+        )
+        async with scoped_database_context_variables(binding.dataset_id, binding.service_user_id):
+            nodes, _ = await (await get_graph_engine()).get_graph_data()
+        assert not any(p.get("file_path") == "settings.yaml" for _, p in nodes)
+        assert all(p.get("indexed_sha") == "b" * 40 for _, p in nodes)
     finally:
         await delete_organization(binding.organization_id, 1)
