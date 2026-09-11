@@ -71,6 +71,7 @@ async def cognify(
     embedding_config: Optional[EmbeddingConfig] = None,
     data_cache: bool = True,
     dry_run: bool = False,
+    data_ids: Optional[list[UUID]] = None,
     **kwargs,
 ):
     """
@@ -114,6 +115,10 @@ async def cognify(
             - Single dataset: "my_dataset"
             - Multiple datasets: ["docs", "research", "reports"]
             - None: Process all datasets for the user
+        data_ids: Optional nonempty list of source Data IDs to process within exactly one
+                  explicitly selected, authorized dataset. Missing or foreign IDs fail;
+                  an empty list never falls back to processing the whole dataset.
+                  Supported for local execution only, without dry_run.
         user: User context for authentication and data access. Uses default if None.
         graph_model: Pydantic model defining the knowledge graph structure.
                     Defaults to KnowledgeGraph for general-purpose processing.
@@ -226,6 +231,8 @@ async def cognify(
 
     client = get_remote_client()
     if client is not None:
+        if data_ids is not None:
+            raise ValueError("data_ids is not supported by remote cognify; use local execution.")
         if dry_run:
             raise ValueError(
                 "dry_run is not supported while connected to a remote Cognee instance. "
@@ -253,6 +260,12 @@ async def cognify(
         from cognee.modules.migrations.startup import run_migrations_and_block
 
         await run_migrations_and_block(datasets, user)
+
+        scoped_data = None
+        if data_ids is not None:
+            if dry_run:
+                raise ValueError("data_ids is not supported with dry_run.")
+            user, datasets, scoped_data = await _resolve_data_scope(datasets, user, data_ids)
 
         resolved_resolver = get_configured_ontology_resolver(config)
         config = {"ontology_config": {"ontology_resolver": resolved_resolver}}
@@ -333,6 +346,7 @@ async def cognify(
             llm_config=llm_config,
             embedding_config=embedding_config,
             data_cache=data_cache,
+            **({"data": scoped_data} if scoped_data is not None else {}),
         )
 
         dataset_desc = str(datasets) if datasets else "all datasets"
@@ -346,6 +360,39 @@ async def cognify(
         record_operation_duration(_duration_ms, _attrs)
 
         return result
+
+
+async def _resolve_data_scope(datasets, user, data_ids):
+    """Authorize before loading source rows; never widen an explicit selection."""
+    from sqlalchemy import select
+
+    from cognee.infrastructure.databases.relational import get_relational_engine
+    from cognee.modules.data.methods import get_authorized_existing_datasets
+    from cognee.modules.data.models import Data
+    from cognee.modules.users.methods import get_default_user
+
+    if not isinstance(data_ids, list) or not data_ids:
+        raise ValueError("data_ids must be a nonempty list of source UUIDs.")
+    ids = {UUID(str(value)) for value in data_ids}
+    selected = [datasets] if isinstance(datasets, (str, UUID)) else datasets
+    if not selected or len(selected) != 1:
+        raise ValueError("data_ids requires exactly one explicit dataset.")
+    user = user or await get_default_user()
+    authorized = await get_authorized_existing_datasets(selected, "write", user)
+    if len(authorized) != 1:
+        raise ValueError("data_ids requires exactly one authorized dataset.")
+    dataset = authorized[0]
+    async with get_relational_engine().get_async_session() as session:
+        rows = list(
+            await session.scalars(
+                select(Data).where(Data.dataset_id == dataset.id, Data.id.in_(ids))
+            )
+        )
+    if {row.id for row in rows} != ids:
+        raise ValueError(
+            "Selected data_ids are missing or do not belong to the authorized dataset."
+        )
+    return user, [dataset.id], rows
 
 
 async def get_default_tasks(  # TODO: Find out a better way to do this (Boris's comment)

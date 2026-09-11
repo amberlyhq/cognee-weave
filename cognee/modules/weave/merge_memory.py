@@ -149,13 +149,31 @@ async def process_merge(
         f"{change.base_sha}:{change.head_sha}:{snapshot.updated_at.isoformat()}".encode()
     ).hexdigest()[:24]
     prefix = f"review:merge:{change.head_sha}:{epoch}"
-    records = await source_records(binding, repository_id)
-    by_key = {r.source_key: r for r in records}
-    for record in records:
-        if record.dataset_id != binding.dataset_id or record.data_id != source_data_id(
-            binding.organization_id, repository_id, record.source_key
+    records = []
+    for record in await source_records(binding, repository_id):
+        if (
+            record.organization_id != binding.organization_id
+            or record.github_repository_id != repository_id
+            or record.data_id
+            != source_data_id(binding.organization_id, repository_id, record.source_key)
         ):
             raise ValueError("Foreign merge receipt identity")
+        # Older unqualified review receipts can predate dataset stamping. They
+        # supply no facts and must not be adopted, re-homed, or used as evidence.
+        # Keep their history untouched while maintaining qualified memory.
+        if (
+            record.dataset_id is None
+            and record.qualification is None
+            and record.source_key.startswith("review:")
+            and not record.source_key.startswith(
+                ("review:qualified:", "review:merge:", "review:code-change:")
+            )
+        ):
+            continue
+        if record.dataset_id != binding.dataset_id:
+            raise ValueError("Foreign merge receipt identity")
+        records.append(record)
+    by_key = {r.source_key: r for r in records}
     manifest = by_key.get(prefix + ":plan")
     if manifest and manifest.status == "completed":
         return {**manifest.qualification["result"], "status": "unchanged"}
