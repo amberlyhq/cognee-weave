@@ -12,6 +12,9 @@ RLS_TABLES = (
     "weave_repository_lifecycles",
     "weave_index_jobs",
     "weave_memory_sources",
+    "weave_memory_notes",
+    "weave_memory_jobs",
+    "weave_memory_operations",
 )
 
 _ORGANIZATION_PREDICATE = (

@@ -8,10 +8,6 @@ from cognee.modules.weave.contracts import (
     DeleteResponse,
     RecallRequest,
     RecallResponse,
-    ReviewMemoryRequest,
-    ReviewMemoryResponse,
-    MergeKnowledgeChange,
-    MergeMemoryResponse,
     SurfaceResponse,
 )
 from cognee.modules.weave.organizations import (
@@ -39,17 +35,84 @@ class LifecycleRequest(BaseModel):
 def get_weave_router() -> APIRouter:
     router = APIRouter(dependencies=[Depends(require_internal_bearer)])
 
-    @router.post(
-        "/organizations/{organization_id}/reviews/remember",
-        response_model=ReviewMemoryResponse,
+    from cognee.modules.weave.agent_memory_contracts import (
+        MemoryApplyRequest,
+        MemoryApplyResponse,
+        MemoryNotesResponse,
     )
-    async def review_memory(organization_id: UUID, request: ReviewMemoryRequest):
-        from cognee.modules.weave.review_memory import remember_review
+
+    @router.get(
+        "/organizations/{organization_id}/repositories/{github_repository_id}/memory-notes",
+        response_model=MemoryNotesResponse,
+    )
+    async def memory_notes(
+        organization_id: UUID,
+        github_repository_id: int,
+        include_retired: bool = True,
+        offset: int = Query(0, ge=0),
+        limit: int = Query(100, ge=1, le=1000),
+    ):
+        from cognee.modules.weave.agent_memory import list_memory_notes
 
         try:
-            return await remember_review(organization_id, request)
+            return await list_memory_notes(
+                organization_id,
+                github_repository_id,
+                include_retired=include_retired,
+                offset=offset,
+                limit=limit,
+            )
         except LookupError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @router.post(
+        "/organizations/{organization_id}/repositories/{github_repository_id}/memory-notes/apply",
+        response_model=MemoryApplyResponse,
+    )
+    async def apply_memory_notes(
+        organization_id: UUID, github_repository_id: int, request: MemoryApplyRequest
+    ):
+        from cognee.modules.weave.agent_memory import apply_memory_notes as apply
+
+        try:
+            return await apply(organization_id, github_repository_id, request)
+        except LookupError as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": getattr(error, "code", "not_ready"), "message": str(error)},
+            ) from error
+        except ValueError as error:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": getattr(error, "code", "not_ready"), "message": str(error)},
+            ) from error
+
+    from cognee.modules.weave.agent_memory_contracts import (
+        MemorySupersedeRequest,
+        MemorySupersedeResponse,
+    )
+
+    @router.post(
+        "/organizations/{organization_id}/repositories/{github_repository_id}/memory-notes/jobs/{job_id}/supersede",
+        response_model=MemorySupersedeResponse,
+    )
+    async def supersede_memory_job(
+        organization_id: UUID,
+        github_repository_id: int,
+        job_id: UUID,
+        request: MemorySupersedeRequest,
+    ):
+        from cognee.modules.weave.agent_memory_supersession import supersede_memory_job as supersede
+
+        try:
+            return await supersede(
+                organization_id, github_repository_id, job_id, request.lifecycle_generation
+            )
+        except LookupError as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": getattr(error, "code", "not_ready"), "message": str(error)},
+            ) from error
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -63,9 +126,7 @@ def get_weave_router() -> APIRouter:
         try:
             binding = await provision_organization(organization_id)
         except OrganizationDeletedError as error:
-            raise HTTPException(
-                status_code=409, detail="Organization is removed"
-            ) from error
+            raise HTTPException(status_code=409, detail="Organization is removed") from error
         return ProvisionOrganizationResponse(
             organization_id=binding.organization_id,
             status="ready",
@@ -79,9 +140,7 @@ def get_weave_router() -> APIRouter:
         organization_id: UUID,
         request: LifecycleRequest,
     ) -> ProvisionOrganizationResponse:
-        binding = await reactivate_organization(
-            organization_id, request.lifecycle_generation
-        )
+        binding = await reactivate_organization(organization_id, request.lifecycle_generation)
         return ProvisionOrganizationResponse(
             organization_id=binding.organization_id if binding else organization_id,
             status="ready" if binding else "stale_ignored",
@@ -112,9 +171,7 @@ def get_weave_router() -> APIRouter:
 
         try:
             if extraction_version != f"enola-{ENOLA_PINNED_VERSION}":
-                raise ValueError(
-                    "extraction_version does not match the installed extractor"
-                )
+                raise ValueError("extraction_version does not match the installed extractor")
             request = IndexRequest(
                 organization_id=organization_id,
                 github_repository_id=github_repository_id,
@@ -131,54 +188,10 @@ def get_weave_router() -> APIRouter:
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         except RepositoryDeletedError as error:
-            raise HTTPException(
-                status_code=409, detail="Repository is removed"
-            ) from error
+            raise HTTPException(status_code=409, detail="Repository is removed") from error
         except LookupError as error:
-            raise HTTPException(
-                status_code=404, detail="Organization not found"
-            ) from error
+            raise HTTPException(status_code=404, detail="Organization not found") from error
         return IndexRepositoryResponse(job_id=job.id, status="accepted")
-
-    @router.post(
-        "/organizations/{organization_id}/repositories/merge-memory",
-        response_model=MergeMemoryResponse,
-    )
-    async def merge_memory(
-        organization_id: UUID,
-        archive: UploadFile = File(...),
-        github_repository_id: int = Form(..., gt=0),
-        repository_owner: str = Form(..., min_length=1, max_length=255),
-        repository_name: str = Form(..., min_length=1, max_length=255),
-        default_branch: str = Form(..., min_length=1, max_length=255),
-        requested_sha: str = Form(..., min_length=40, max_length=40),
-        lifecycle_generation: int = Form(..., gt=0, le=2**63 - 1),
-        knowledge_change: str = Form(..., max_length=6000000),
-    ) -> MergeMemoryResponse:
-        from cognee.modules.weave.archive import persisted_upload
-        from cognee.modules.weave.indexing import IndexRequest
-        from cognee.modules.weave.native_memory import NATIVE_PIPELINE_VERSION
-        from cognee.modules.weave.merge_memory import remember_merge
-
-        try:
-            change = MergeKnowledgeChange.model_validate_json(knowledge_change)
-            request = IndexRequest(
-                organization_id=organization_id,
-                github_repository_id=github_repository_id,
-                repository_owner=repository_owner,
-                repository_name=repository_name,
-                default_branch=default_branch,
-                requested_sha=requested_sha,
-                lifecycle_generation=lifecycle_generation,
-                pipeline_version=NATIVE_PIPELINE_VERSION,
-                extraction_version=f"enola-{ENOLA_PINNED_VERSION}",
-            )
-            async with persisted_upload(archive) as archive_path:
-                return await remember_merge(request, change, archive_path)
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        except LookupError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @router.post(
         "/organizations/{organization_id}/repositories/{github_repository_id}/activate",
@@ -271,9 +284,7 @@ def get_weave_router() -> APIRouter:
         from cognee.modules.weave.deletion import SurfaceNotFound, delete_organization
 
         try:
-            return await delete_organization(
-                organization_id, request.lifecycle_generation
-            )
+            return await delete_organization(organization_id, request.lifecycle_generation)
         except SurfaceNotFound as error:
             raise HTTPException(status_code=404, detail="Resource not found") from error
 

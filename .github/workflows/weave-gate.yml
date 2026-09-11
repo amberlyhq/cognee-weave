@@ -115,8 +115,7 @@ jobs:
           cognee/tests/e2e/postgres/test_weave_lock_wait.py
           cognee/tests/e2e/postgres/test_weave_native_storage.py
           cognee/tests/e2e/postgres/test_weave_gradual_review_memory.py
-          cognee/tests/e2e/postgres/test_weave_qualified_review_memory.py
-          cognee/tests/e2e/postgres/test_weave_merge_memory.py
+          cognee/tests/e2e/postgres/test_weave_agent_memory.py
           cognee/tests/e2e/postgres/test_weave_scoped_source_ingestion.py
           cognee/tests/e2e/postgres/test_weave_dataset_migration.py
           cognee/tests/e2e/postgres/test_pgvector_hnsw_plan.py

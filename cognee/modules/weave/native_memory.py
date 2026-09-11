@@ -61,9 +61,9 @@ async def repository_dataset(binding, repository_id: int, *, legacy: bool = Fals
             select(Dataset).where(
                 Dataset.name
                 == (
-                    repository_dataset_name(
-                        binding.organization_id, repository_id
-                    ).removesuffix("-code-v1")
+                    repository_dataset_name(binding.organization_id, repository_id).removesuffix(
+                        "-code-v1"
+                    )
                     if legacy
                     else repository_dataset_name(binding.organization_id, repository_id)
                 ),
@@ -73,9 +73,7 @@ async def repository_dataset(binding, repository_id: int, *, legacy: bool = Fals
         )
 
 
-async def forget_repository(
-    binding, repository_id: int, *, preserve_reviews: bool = False
-) -> None:
+async def forget_repository(binding, repository_id: int, *, preserve_reviews: bool = False) -> None:
     from cognee.modules.weave.memory_sources import forget_source, source_records
 
     user = await get_user(binding.service_user_id)
@@ -84,6 +82,8 @@ async def forget_repository(
             if preserve_reviews and record.source_key.startswith("review:"):
                 continue
             await forget_source(binding, user, record)
+    if not preserve_reviews:
+        await forget_note_receipts(binding, repository_id)
     # Remove the dedicated native dataset for this repository, including an
     # interrupted build or a dataset created by the original directory pipeline.
     for legacy in (False, True):
@@ -123,8 +123,24 @@ async def forget_organization_memory(binding) -> None:
     async with scoped_database_context_variables(binding.dataset_id, user.id):
         for record in await source_records(binding):
             await forget_source(binding, user, record)
+    await forget_note_receipts(binding)
     for dataset in datasets:
         await _forget_dataset(binding, dataset, user)
+
+
+async def forget_note_receipts(binding, repository_id=None):
+    from sqlalchemy import delete
+    from cognee.modules.weave.models import WeaveMemoryJob, WeaveMemoryNote, WeaveMemoryOperation
+    from cognee.modules.weave.organizations import set_weave_organization_scope
+
+    async with get_relational_engine().get_async_session() as session:
+        await set_weave_organization_scope(session, binding.organization_id)
+        for model in (WeaveMemoryOperation, WeaveMemoryJob, WeaveMemoryNote):
+            statement = delete(model).where(model.organization_id == binding.organization_id)
+            if repository_id is not None:
+                statement = statement.where(model.github_repository_id == repository_id)
+            await session.execute(statement)
+        await session.commit()
 
 
 def repository_provenance(request):
@@ -169,8 +185,7 @@ async def remember_repository(binding, request, repository):
     import hashlib
 
     file_hashes = {
-        path: hashlib.sha256((repository / path).read_bytes()).hexdigest()
-        for path in paths
+        path: hashlib.sha256((repository / path).read_bytes()).hexdigest() for path in paths
     }
     token = native_organization.set(binding.organization_id)
     try:
@@ -198,11 +213,11 @@ async def remember_repository(binding, request, repository):
             )
             assert_native_completed(result)
             from cognee.modules.weave.code_files import sync_code_files
-            from cognee.modules.weave.review_code_links import sync_review_code_links
+            from cognee.modules.weave.note_code_links import sync_repository_note_links
 
             await sync_code_files(binding, repository_provenance(request), paths)
             await stamp_file_hashes(binding, request.github_repository_id, file_hashes)
-            await sync_review_code_links(binding, request.github_repository_id)
+            await sync_repository_note_links(binding, request.github_repository_id)
             return result
     finally:
         native_organization.reset(token)
@@ -252,9 +267,7 @@ async def _recall_repository_memory(organization_id, request):
     # behind a long-running index or deletion of the customer dataset.
     async with weave_operation_lock(organization_id, wait=False) as acquired:
         if not acquired:
-            return _unavailable(
-                organization_id, request, "unavailable", "backend_unavailable"
-            )
+            return _unavailable(organization_id, request, "unavailable", "backend_unavailable")
         binding = await get_organization_binding(organization_id)
         if binding is None:
             return _unavailable(
@@ -264,22 +277,16 @@ async def _recall_repository_memory(organization_id, request):
         # every repository receipt, including incomplete first-time indexes.
         records = await customer_snapshots(organization_id)
         if not snapshots_ready(records):
-            return _unavailable(
-                organization_id, request, "unavailable", "no_indexed_repository"
-            )
+            return _unavailable(organization_id, request, "unavailable", "no_indexed_repository")
         selected = {record.github_repository_id for record in records}
         required = set(request.github_repository_ids)
         if request.primary_github_repository_id is not None:
             required.add(request.primary_github_repository_id)
         if not required.issubset(selected):
-            return _unavailable(
-                organization_id, request, "unavailable", "no_indexed_repository"
-            )
+            return _unavailable(organization_id, request, "unavailable", "no_indexed_repository")
         datasets = await memory_datasets(binding, records)
         if not datasets:
-            return _unavailable(
-                organization_id, request, "unavailable", "no_indexed_repository"
-            )
+            return _unavailable(organization_id, request, "unavailable", "no_indexed_repository")
         user = await get_user(binding.service_user_id)
         code_datasets = datasets
         # Code navigation works immediately and never invokes an LLM or embeddings.

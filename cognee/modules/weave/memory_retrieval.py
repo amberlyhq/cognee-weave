@@ -30,6 +30,12 @@ def eligible_memory_sources(binding, sources, repository_ids=()):
         qualification = source.qualification
         if not isinstance(qualification, dict):
             continue
+        if qualification.get("memory_note") is True:
+            if qualification.get("native_source_tag") == native_source_tag(
+                source.data_id, source.content_hash
+            ):
+                eligible.append(source)
+            continue
         facts = qualification.get("facts")
         states = qualification.get("fact_states")
         if not isinstance(facts, list) or not facts or not isinstance(states, dict):

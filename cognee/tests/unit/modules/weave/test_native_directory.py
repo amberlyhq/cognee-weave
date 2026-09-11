@@ -81,7 +81,7 @@ async def test_repository_uses_one_native_directory_operation(
         calls.append("remember")
         return SimpleNamespace(status=status)
 
-    from cognee.modules.weave import code_files, review_code_links
+    from cognee.modules.weave import code_files, note_code_links
 
     async def no_graph(*args, **kwargs):
         return None
@@ -98,7 +98,7 @@ async def test_repository_uses_one_native_directory_operation(
     monkeypatch.setattr(knowledge_lifecycle, "invalidate_changed_knowledge", invalidate)
     monkeypatch.setattr(knowledge_lifecycle, "stamp_file_hashes", stamp)
     monkeypatch.setattr(code_files, "sync_code_files", no_graph)
-    monkeypatch.setattr(review_code_links, "sync_review_code_links", no_graph)
+    monkeypatch.setattr(note_code_links, "sync_repository_note_links", no_graph)
     monkeypatch.setattr(native_memory, "get_user", get_user)
     monkeypatch.setattr(native_memory, "customer_dataset", get_dataset)
     monkeypatch.setattr(native_memory, "repository_dataset", get_dataset)
