@@ -53,32 +53,19 @@ async def test_qualified_review_uses_native_memory_and_replays_without_model_cal
         async def model(*args, **kwargs):
             cls = kwargs.get("response_model") or args[2]
             calls.append(cls.__name__)
-            if cls.__name__ == "KnowledgeAudit":
-                return cls(
-                    issues=(
-                        [
-                            dict(
-                                fact_index=0,
-                                reason="The claim that it never returns a message is not supported.",
-                            )
-                        ]
-                        if calls.count("KnowledgeAudit") == 1
-                        else []
-                    )
-                )
             if cls.__name__ == "KnowledgeSelection":
                 if calls.count("KnowledgeSelection") == 1:
                     return cls(
                         facts=[
                             dict(
-                                statement="MessagePayment never returns any message.",
+                                statement="MessagePayment returns a payment message.",
                                 code_path="main.go",
                                 certainty="reported",
-                                evidence_ids=["E1"],
+                                evidence_ids=["invalid-source"],
                             )
                         ]
                     )
-                assert "not supported" in kwargs["text_input"]
+                assert "unknown passage" in kwargs["text_input"]
                 return cls(
                     facts=[
                         dict(
@@ -231,6 +218,7 @@ async def test_qualified_review_uses_native_memory_and_replays_without_model_cal
         ).status == "unchanged"
         assert calls == before
         assert calls.count("KnowledgeSelection") == 2
+        assert "KnowledgeAudit" not in calls
         assert (
             await remember_review(
                 binding.organization_id, req.model_copy(update={"artifact_revision": 0})
@@ -300,8 +288,6 @@ async def test_identical_customer_paths_and_fact_text_never_share_storage_or_lin
                     )
                 ]
             )
-        if cls.__name__ == "KnowledgeAudit":
-            return cls(issues=[])
         if cls.__name__ == "KnowledgeGraph":
             return cls(
                 nodes=[

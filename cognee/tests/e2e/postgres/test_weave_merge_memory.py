@@ -116,7 +116,11 @@ async def test_merged_knowledge_replaces_current_claims_preserves_history_and_is
     from cognee.modules.search.types import SearchType
     from cognee.modules.users.methods import get_user
     from cognee.modules.weave.config import get_weave_embedding_config, get_weave_llm_config
-    from cognee.modules.weave.contracts import MergeKnowledgeChange, ReviewMemoryRequest
+    from cognee.modules.weave.contracts import (
+        MergeKnowledgeChange,
+        RecallRequest,
+        ReviewMemoryRequest,
+    )
     from cognee.modules.weave.deletion import delete_organization, delete_repository
     from cognee.modules.weave.indexing import index_repository_archive
     from cognee.modules.weave.knowledge_lifecycle import fact_digest
@@ -124,7 +128,9 @@ async def test_merged_knowledge_replaces_current_claims_preserves_history_and_is
     from cognee.modules.weave.memory_sources import source_records
     from cognee.modules.weave.merge_memory import remember_merge
     from cognee.modules.weave.organizations import provision_organization
+    from cognee.modules.weave.recall import recall
     from cognee.modules.weave.review_memory import remember_review
+    from cognee.modules.weave.scope import native_organization
     from cognee.tests.e2e.postgres.test_weave_hybrid_recall import _archive, _request
 
     binding, canary = await provision_organization(uuid4()), await provision_organization(uuid4())
@@ -147,7 +153,7 @@ async def test_merged_knowledge_replaces_current_claims_preserves_history_and_is
                     )
                 ]
             )
-        if schema.__name__ in {"KnowledgeAudit", "MergeAudit"}:
+        if schema.__name__ == "KnowledgeAudit":
             return schema(issues=[])
         if schema.__name__ == "MergeSelection":
             packet = json.loads(text.split("\nCURRENT SOURCE PASSAGES:", 1)[0])
@@ -265,6 +271,36 @@ async def test_merged_knowledge_replaces_current_claims_preserves_history_and_is
         assert all("beta message" in r.text and "alpha message" not in r.text for r in chunks)
         assert {r.metadata["data_id"] for r in chunks} == {str(current[0].data_id)}
         assert all(r.dataset_id == str(binding.dataset_id) for r in chunks)
+        # Exercise the public service, which receives the authorized organization
+        # argument without requiring callers to initialize native database scope.
+        for caller_scope in (None, canary.organization_id):
+            token = native_organization.set(caller_scope)
+            try:
+                response = await recall(
+                    binding.organization_id,
+                    RecallRequest(
+                        query="What does Message return?",
+                        primary_github_repository_id=repository_id,
+                    ),
+                )
+                assert native_organization.get() == caller_scope
+                assert response.status == "available" and not response.diagnostics
+                service_chunks = [
+                    item
+                    for item in json.loads(response.native_memory)
+                    if item.get("kind") == "chunk"
+                ]
+                assert service_chunks
+                assert all(
+                    "beta message" in item["text"] and "alpha message" not in item["text"]
+                    for item in service_chunks
+                )
+                assert {item["metadata"]["data_id"] for item in service_chunks} == {
+                    str(current[0].data_id)
+                }
+                assert {item["dataset_id"] for item in service_chunks} == {str(binding.dataset_id)}
+            finally:
+                native_organization.reset(token)
         nodes, edges = await graph(binding)
         current_nodes = [
             (i, p)

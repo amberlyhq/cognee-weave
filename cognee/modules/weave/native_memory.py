@@ -232,6 +232,16 @@ def snapshots_ready(records) -> bool:
 
 
 async def recall_repository_memory(organization_id, request):
+    # HTTP authentication supplies the organization argument, not a native
+    # database ContextVar. Scope both recall lanes and restore any caller scope.
+    token = native_organization.set(organization_id)
+    try:
+        return await _recall_repository_memory(organization_id, request)
+    finally:
+        native_organization.reset(token)
+
+
+async def _recall_repository_memory(organization_id, request):
     import cognee
     from cognee.modules.weave.contracts import RecallResponse, RecallDiagnostic
     from cognee.modules.weave.indexing import weave_operation_lock

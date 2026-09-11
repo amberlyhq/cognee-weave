@@ -65,8 +65,10 @@ The current repository lifecycle and indexed commit must still match. Native
 hash changes can complete a GitHub file comparison that reached its result cap.
 
 A bounded qualification step uses merged source as authority and completed review
-context only as hints. An independent audit rejects unsupported statements;
-rejections become feedback for bounded correction. Accepted selections are saved
+context only as hints. The configured model qualifies facts and decides which prior
+claims remain current, are superseded, or cannot be verified. There is no second
+model auditor or static semantic-quality checker. Invalid source references become
+feedback for bounded correction, preserving already accepted selections. Selections are saved
 before native remember. Native remember receives only qualified statements and
 source references, while exact source quotes stay in receipts and annotations.
 Model, provider and embedding configuration remain unchanged.
@@ -79,9 +81,10 @@ Unqualified legacy review receipts without a dataset field contribute no facts.
 Merge maintenance preserves and ignores those receipts. Qualified sources and
 merge plans still require the exact customer dataset and canonical source ID.
 
-Verified replacements become current facts, with the checked commit and exact
+Model-qualified replacements become current facts, with the checked commit and exact
 file links for every supporting source path. Historical originals remain stored
-and reference their replacement source. Unsupported claims remain unverified.
+and reference their replacement source. Claims the model cannot verify remain unverified. Completion does not guarantee
+that the configured model interpreted every passage correctly.
 Repeated delivery reuses the saved plan and selections. A return to an earlier
 commit creates a new indexing epoch, so it cannot reuse old validity statuses.
 Each request processes at most four unfinished batches; Amberly saves continuation
