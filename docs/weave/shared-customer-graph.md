@@ -70,6 +70,14 @@ rejections become feedback for bounded correction. Accepted selections are saved
 before native remember. Native remember receives only qualified statements and
 source references, while exact source quotes stay in receipts and annotations.
 Model, provider and embedding configuration remain unchanged.
+Each write passes its canonical source ID to native processing. Only that
+document is processed; older documents and disposable code archive manifests
+remain untouched. A missing or foreign source ID fails within the authorized
+dataset instead of expanding processing to the whole dataset.
+
+Unqualified legacy review receipts without a dataset field contribute no facts.
+Merge maintenance preserves and ignores those receipts. Qualified sources and
+merge plans still require the exact customer dataset and canonical source ID.
 
 Verified replacements become current facts, with the checked commit and exact
 file links for every supporting source path. Historical originals remain stored

@@ -55,6 +55,7 @@ class RememberKwargs(TypedDict, total=False):
 
     graph_model: Any
     node_set: List[str]
+    data_ids: List[UUID]
     preferred_loaders: list
     incremental_loading: bool
     data_cache: bool
@@ -90,7 +91,9 @@ _ADD_ONLY = frozenset(
         "max_rows_per_table",
     }
 )
-_COGNIFY_ONLY = frozenset({"graph_model", "chunks_per_batch", "config", "temporal_cognify"})
+_COGNIFY_ONLY = frozenset(
+    {"graph_model", "chunks_per_batch", "config", "temporal_cognify", "data_ids"}
+)
 _SHARED = frozenset(
     {
         "user",
@@ -946,6 +949,8 @@ async def _remember_inner(
 
     client = get_remote_client()
     if client is not None:
+        if kwargs.get("data_ids") is not None:
+            raise ValueError("data_ids is not supported by remote remember; use local execution.")
         span.set_attribute(COGNEE_OPERATION_MODE, "cloud")
         return await client.remember(
             data,

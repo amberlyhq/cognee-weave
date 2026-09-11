@@ -152,6 +152,7 @@ async def update(
 
     cognify_run = await cognify(
         datasets=[dataset_id],
+        data_ids=[pinned_id],
         user=user,
         vector_db_config=vector_db_config,
         graph_db_config=graph_db_config,

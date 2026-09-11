@@ -336,3 +336,40 @@ async def test_foreign_existing_native_data_stops_retry_before_provider_or_decis
     assert len(case.native_calls) == 1
     assert previous_state(case) == before
     assert merge_records(case, plans=True)[0].status != "completed"
+
+
+@pytest.mark.asyncio
+async def test_legacy_unqualified_receipt_without_dataset_does_not_block_merge(merge_case):
+    case = merge_case
+    key = "review:" + str(uuid4())
+    identity = (case.binding.organization_id, 42, key)
+    legacy = WeaveMemorySource(
+        organization_id=case.binding.organization_id,
+        github_repository_id=42,
+        source_key=key,
+        data_id=source_data_id(*identity),
+        dataset_id=None,
+        content_hash="c" * 64,
+        status="completed",
+        qualification=None,
+    )
+    case.store.sources[identity] = legacy
+    result = await run_merge(case)
+    assert result["status"] == "completed"
+    assert result["facts_rechecked"] == 1
+    preserved = case.store.sources[identity]
+    assert preserved.dataset_id is None and preserved.qualification is None
+    assert all(f["source_key"] != key for f in case.qualification_calls[0]["prior_facts"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["qualified", "merge"])
+async def test_missing_dataset_on_qualified_or_merge_receipt_is_rejected(merge_case, kind):
+    case = merge_case
+    if kind == "qualified":
+        case.store.sources[(case.binding.organization_id, 42, case.previous_key)].dataset_id = None
+    else:
+        await run_merge(case)
+        merge_records(case, plans=True)[0].dataset_id = None
+    with pytest.raises(ValueError, match="Foreign merge receipt"):
+        await run_merge(case)

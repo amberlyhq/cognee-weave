@@ -129,6 +129,7 @@ async def sync_source(
         result = await cognee.remember(
             item,
             dataset_id=binding.dataset_id,
+            data_ids=[data_id],
             user=user,
             llm_config=llm,
             embedding_config=embedding,
