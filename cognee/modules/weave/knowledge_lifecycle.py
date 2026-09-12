@@ -83,7 +83,7 @@ async def invalidate_changed_knowledge(binding, repository_id, head_sha, file_ha
     from cognee.modules.retrieval.code_retriever import CODE_NODE_TYPES
 
     nodes, edges = await graph.get_filtered_graph_data(
-        [{"type": [*CODE_NODE_TYPES, "CodeRepository"]}], max_edges=1000000
+        [{"type": [*CODE_NODE_TYPES, "CodeRepository"]}]
     )
     previous = {
         p["file_path"]: p.get("weave_content_hash")

@@ -36,8 +36,6 @@ def test_recall_request_is_allow_listed_and_bounded():
         {"mode": "cypher", "query": "Message"},
         {"mode": "repository_context", "query": "Message", "dataset_id": "anything"},
         {"mode": "repository_context", "query": "Message", "schema": "public"},
-        {"mode": "repository_context", "query": "Message", "top_k": 26},
-        {"mode": "repository_context", "query": "Message", "depth": 5},
         {"mode": "repository_context", "query": "Message", "primary_github_repository_id": 0},
         {"mode": "repository_context", "query": "Message", "deadline_ms": 100},
     )
@@ -104,7 +102,7 @@ def test_recall_response_is_provenance_first_and_has_no_governance_decision_fiel
 
 
 @pytest.mark.asyncio
-async def test_cross_repository_snapshot_lookup_is_bounded(monkeypatch):
+async def test_cross_repository_snapshot_lookup_preserves_all_selected_repositories(monkeypatch):
     from cognee.modules.weave import recall as recall_module
 
     captured = {}
@@ -137,7 +135,7 @@ async def test_cross_repository_snapshot_lookup_is_bounded(monkeypatch):
         920021,
     )
 
-    assert captured["query"]._limit_clause.value == 20
+    assert captured["query"]._limit_clause is None
     assert "CASE WHEN" in str(captured["query"])
 
 
@@ -229,3 +227,41 @@ async def test_recall_has_no_added_deadline_and_backend_errors_do_not_escape(mon
     assert unavailable.status == "unavailable"
     assert unavailable.diagnostics[0].code == "backend_unavailable"
     assert "secret" not in unavailable.model_dump_json()
+
+
+def test_native_payloads_and_requested_search_sizes_are_not_artificially_capped():
+    from cognee.modules.weave.contracts import (
+        RecallRequest,
+        RecallResponse,
+        SurfaceResponse,
+        ReviewMemoryRequest,
+    )
+
+    org = UUID("7e1a7b9d-08c2-4f57-9884-623e01b68a01")
+    request = RecallRequest(query="x" * 3000, top_k=100, depth=8, seeds=["symbol" * 100])
+    assert request.top_k == 100
+    payload = "x" * 1_100_000
+    assert (
+        RecallResponse(
+            status="available",
+            organization_id=org,
+            mode="repository_context",
+            native_memory=payload,
+        ).native_memory
+        == payload
+    )
+    assert (
+        SurfaceResponse(organization_id=org, surface="export", native_graph=payload).native_graph
+        == payload
+    )
+    assert (
+        ReviewMemoryRequest(
+            github_repository_id=1,
+            review_id=org,
+            head_sha="a" * 40,
+            lifecycle_generation=1,
+            artifact_revision=0,
+            content=payload,
+        ).content
+        == payload
+    )

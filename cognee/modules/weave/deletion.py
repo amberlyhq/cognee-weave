@@ -111,23 +111,16 @@ async def _read_locked_surface(organization_id, repository_ids, surface) -> Surf
         if not datasets:
             raise SurfaceNotFound()
         native = []
-        remaining_nodes, remaining_edges = 500, 1000
         for dataset in datasets:
-            if remaining_nodes <= 0:
-                break
             async with scoped_database_context_variables(dataset.id, binding.service_user_id):
                 graph = await get_graph_engine()
                 nodes, edges = await graph.get_filtered_graph_data(
-                    [], max_nodes=remaining_nodes, max_edges=remaining_edges
+                    []
                 )
-            remaining_nodes -= len(nodes)
-            remaining_edges -= len(edges)
             native.append(
                 {"dataset_id": str(dataset.id), "scope": "customer", "nodes": nodes, "edges": edges}
             )
         payload = json.dumps(native, default=str, ensure_ascii=False)
-        if len(payload) > 1000000:
-            raise ValueError("Native graph exceeds the export size boundary")
         return SurfaceResponse(
             organization_id=organization_id,
             surface=surface,
@@ -143,8 +136,6 @@ async def _read_locked_surface(organization_id, repository_ids, surface) -> Surf
         graph = await get_graph_engine()
         raw_nodes, raw_edges = await graph.get_filtered_graph_data(
             [{"type": [*CODE_NODE_TYPES, "CodeRepository"]}],
-            max_nodes=500,
-            max_edges=1000,
         )
 
     nodes = []
@@ -159,8 +150,6 @@ async def _read_locked_surface(organization_id, repository_ids, surface) -> Surf
             continue
         nodes.append(candidate)
         identities[str(node_id)] = candidate.fact_identity
-        if len(nodes) >= 500:
-            break
 
     edges = []
     for edge in raw_edges or []:
@@ -176,8 +165,6 @@ async def _read_locked_surface(organization_id, repository_ids, surface) -> Surf
                 relation_type=relation_type,
             )
         )
-        if len(edges) >= 1000:
-            break
 
     return SurfaceResponse(
         organization_id=organization_id,
