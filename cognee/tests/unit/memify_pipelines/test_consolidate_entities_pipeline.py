@@ -27,6 +27,19 @@ from cognee.tasks.memify.consolidate_entities import (
 GRAPH = "cognee.tasks.memify.consolidate_entities.get_graph_engine"
 VECTOR = "cognee.tasks.memify.consolidate_entities.get_vector_engine"
 
+
+@pytest.fixture(autouse=True)
+def ownership_boundary(monkeypatch):
+    # These task-unit tests have no native storage. The ownership implementation
+    # is covered independently with graph provenance and real Postgres tests.
+    helper = AsyncMock()
+    monkeypatch.setattr(
+        "cognee.modules.graph.methods.transfer_consolidated_ownership.transfer_consolidated_ownership",
+        helper,
+    )
+    return helper
+
+
 # Deterministic, valid-UUID entity ids (Entity.id_for hashes the name).
 ID_NYC = str(Entity.id_for("NYC"))
 ID_NYCITY = str(Entity.id_for("New York City"))

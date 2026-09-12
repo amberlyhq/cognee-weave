@@ -15,6 +15,7 @@ RLS_TABLES = (
     "weave_memory_notes",
     "weave_memory_jobs",
     "weave_memory_operations",
+    "weave_memory_cleanups",
 )
 
 _ORGANIZATION_PREDICATE = (

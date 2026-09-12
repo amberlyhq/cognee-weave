@@ -38,6 +38,8 @@ def get_weave_router() -> APIRouter:
     from cognee.modules.weave.agent_memory_contracts import (
         MemoryApplyRequest,
         MemoryApplyResponse,
+        MemoryCleanupRequest,
+        MemoryCleanupResponse,
         MemoryNotesResponse,
     )
 
@@ -85,6 +87,26 @@ def get_weave_router() -> APIRouter:
             raise HTTPException(
                 status_code=400,
                 detail={"code": getattr(error, "code", "not_ready"), "message": str(error)},
+            ) from error
+
+    @router.post(
+        "/organizations/{organization_id}/repositories/{github_repository_id}/memory-notes/jobs/{job_id}/cleanup",
+        response_model=MemoryCleanupResponse,
+    )
+    async def cleanup_memory_job(
+        organization_id: UUID,
+        github_repository_id: int,
+        job_id: UUID,
+        request: MemoryCleanupRequest,
+    ):
+        from cognee.modules.weave.memory_cleanup import cleanup_memory_job as cleanup
+
+        try:
+            return await cleanup(organization_id, github_repository_id, job_id, request)
+        except LookupError as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "not_ready", "message": str(error)},
             ) from error
 
     from cognee.modules.weave.agent_memory_contracts import (

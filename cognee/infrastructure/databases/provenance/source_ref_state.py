@@ -98,6 +98,7 @@ def provenance_after_attach(
     current_run_refs: List[str],
     add_keys: List[str],
     pipeline_run_id: Optional[str],
+    source_run_refs: Optional[List[str]] = None,
 ) -> ProvenanceColumns:
     """Return the four provenance columns after attaching ``add_keys``.
 
@@ -124,6 +125,30 @@ def provenance_after_attach(
             if run_ref not in run_refs:
                 run_refs.append(run_ref)
 
+    # Consolidation moves existing ownership rather than introducing it. Preserve
+    # the exact historical run/source pairs, including multiple original runs.
+    # Ordinary attaches omit this argument and keep first-introduction semantics.
+    for historical_ref in source_run_refs or []:
+        if get_source_ref_key_from_source_run_ref(historical_ref) not in add_keys:
+            raise ValueError("Historical run ref must belong to a supplied source key")
+        if historical_ref not in run_refs:
+            run_refs.append(historical_ref)
+    if source_run_refs is not None:
+        # A source attachment without a run is nonrollbackable. Consolidating
+        # another alias must never turn that ownership into a run-only claim,
+        # regardless of which alias became canonical. These fields are rollback
+        # indexes, so an untracked contribution supersedes run entries for its
+        # source key; ordinary ingestion (argument omitted) is unchanged.
+        tracked_current = {get_source_ref_key_from_source_run_ref(ref) for ref in current_run_refs}
+        tracked_incoming = {get_source_ref_key_from_source_run_ref(ref) for ref in source_run_refs}
+        if pipeline_run_id is not None:
+            tracked_incoming.update(add_keys)
+        nonrollbackable = (set(current_keys) - tracked_current) | (set(add_keys) - tracked_incoming)
+        run_refs = [
+            ref
+            for ref in run_refs
+            if get_source_ref_key_from_source_run_ref(ref) not in nonrollbackable
+        ]
     return ProvenanceColumns(keys, derive_dataset_ids(keys), derive_run_ids(run_refs), run_refs)
 
 
@@ -131,6 +156,7 @@ def provenance_after_remove(
     current_keys: List[str],
     current_run_refs: List[str],
     remove_keys: List[str],
+    pipeline_run_id: Optional[str] = None,
 ) -> ProvenanceColumns:
     """Return the four provenance columns after removing ``remove_keys``.
 
@@ -139,6 +165,20 @@ def provenance_after_remove(
     dataset/run disappearing automatically drops that id.
     """
     removed = set(remove_keys)
+    if pipeline_run_id is not None:
+        run = coerce_run_uuid(pipeline_run_id)
+        run_refs = [
+            ref
+            for ref in current_run_refs
+            if not (
+                get_pipeline_run_id_from_source_run_ref(ref) == run
+                and get_source_ref_key_from_source_run_ref(ref) in removed
+            )
+        ]
+        remaining_run_keys = {get_source_ref_key_from_source_run_ref(ref) for ref in run_refs}
+        removed -= remaining_run_keys
+        keys = [key for key in current_keys if key not in removed]
+        return ProvenanceColumns(keys, derive_dataset_ids(keys), derive_run_ids(run_refs), run_refs)
     keys = [key for key in current_keys if key not in removed]
     run_refs = [
         ref

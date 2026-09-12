@@ -91,3 +91,24 @@ class MemorySupersedeResponse(BaseModel):
     github_repository_id: int
     job_id: UUID
     status: Literal["superseded", "completed"]
+
+
+class MemoryCleanupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    lifecycle_generation: int = Field(gt=0)
+    mode: Literal["preview", "apply"]
+
+
+class NativeCleanupRun(BaseModel):
+    pipeline_run_id: UUID
+    dataset_id: UUID
+    status: str
+
+
+class MemoryCleanupResponse(BaseModel):
+    organization_id: UUID
+    github_repository_id: int
+    job_id: UUID
+    mode: Literal["preview", "apply"]
+    status: Literal["completed"] = "completed"
+    native_runs: list[NativeCleanupRun]

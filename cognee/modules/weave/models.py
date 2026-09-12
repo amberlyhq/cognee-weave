@@ -217,3 +217,22 @@ class WeaveMemoryOperation(Base):
     version = Column(BigInteger, nullable=False)
     status = Column(String(32), nullable=False)
     receipt = Column(JSON, nullable=True)
+
+
+class WeaveMemoryCleanup(Base):
+    """Native cleanup progress, separate from accepted note operations."""
+
+    __tablename__ = "weave_memory_cleanups"
+    organization_id = Column(
+        UUID,
+        ForeignKey("weave_organization_bindings.organization_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    job_id = Column(UUID, primary_key=True)
+    mode = Column(String(16), primary_key=True)
+    github_repository_id = Column(BigInteger, nullable=False)
+    lifecycle_generation = Column(BigInteger, nullable=False)
+    status = Column(String(32), nullable=False)
+    receipt = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)

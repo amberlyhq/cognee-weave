@@ -130,12 +130,17 @@ async def forget_organization_memory(binding) -> None:
 
 async def forget_note_receipts(binding, repository_id=None):
     from sqlalchemy import delete
-    from cognee.modules.weave.models import WeaveMemoryJob, WeaveMemoryNote, WeaveMemoryOperation
+    from cognee.modules.weave.models import (
+        WeaveMemoryCleanup,
+        WeaveMemoryJob,
+        WeaveMemoryNote,
+        WeaveMemoryOperation,
+    )
     from cognee.modules.weave.organizations import set_weave_organization_scope
 
     async with get_relational_engine().get_async_session() as session:
         await set_weave_organization_scope(session, binding.organization_id)
-        for model in (WeaveMemoryOperation, WeaveMemoryJob, WeaveMemoryNote):
+        for model in (WeaveMemoryCleanup, WeaveMemoryOperation, WeaveMemoryJob, WeaveMemoryNote):
             statement = delete(model).where(model.organization_id == binding.organization_id)
             if repository_id is not None:
                 statement = statement.where(model.github_repository_id == repository_id)

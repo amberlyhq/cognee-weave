@@ -555,8 +555,7 @@ class PostgresDemoAdapter(GraphDBInterface):
             return []
         result = await session.execute(
             text(
-                "SELECT id, name, type, properties FROM graph_node "
-                "WHERE id = ANY(:ids) ORDER BY id"
+                "SELECT id, name, type, properties FROM graph_node WHERE id = ANY(:ids) ORDER BY id"
             ),
             {"ids": node_ids},
         )
@@ -604,12 +603,15 @@ class PostgresDemoAdapter(GraphDBInterface):
             return []
         limit_clause = " LIMIT :edge_limit" if limit is not None else ""
         result = await session.execute(
-            text("""
+            text(
+                """
                 SELECT source_id, target_id, relationship_name, properties
                 FROM graph_edge
                 WHERE source_id = ANY(:ids) AND target_id = ANY(:ids)
                 ORDER BY source_id, target_id, relationship_name
-            """ + limit_clause),
+            """
+                + limit_clause
+            ),
             {"ids": node_ids, **({"edge_limit": limit} if limit is not None else {})},
         )
         return [
@@ -805,14 +807,12 @@ class PostgresDemoAdapter(GraphDBInterface):
         statement_timeout_ms: int = DEFAULT_NEIGHBORHOOD_TIMEOUT_MS,
     ) -> Tuple[List[Tuple[str, Dict[str, Any]]], List[Tuple[str, str, str, Dict[str, Any]]]]:
         """Return a deterministic, bounded neighborhood using one recursive CTE."""
-        depth, fan_out, max_nodes, max_edges, statement_timeout_ms = (
-            _validate_neighborhood_bounds(
-                depth=depth,
-                fan_out=fan_out,
-                max_nodes=max_nodes,
-                max_edges=max_edges,
-                statement_timeout_ms=statement_timeout_ms,
-            )
+        depth, fan_out, max_nodes, max_edges, statement_timeout_ms = _validate_neighborhood_bounds(
+            depth=depth,
+            fan_out=fan_out,
+            max_nodes=max_nodes,
+            max_edges=max_edges,
+            statement_timeout_ms=statement_timeout_ms,
         )
         if not node_ids:
             return [], []
@@ -991,6 +991,7 @@ class PostgresDemoAdapter(GraphDBInterface):
         node_ids: list[str],
         source_ref_keys: list[str],
         pipeline_run_id: str | None = None,
+        source_run_refs: list[str] | None = None,
     ) -> None:
         if not source_ref_keys:
             return
@@ -1001,7 +1002,7 @@ class PostgresDemoAdapter(GraphDBInterface):
                 session,
                 node_ids,
                 lambda keys, run_refs: provenance_after_attach(
-                    keys, run_refs, keys_to_add, pipeline_run_id
+                    keys, run_refs, keys_to_add, pipeline_run_id, source_run_refs
                 ),
             )
             await session.commit()
@@ -1011,6 +1012,7 @@ class PostgresDemoAdapter(GraphDBInterface):
         edges: list[EdgeIdentity],
         source_ref_keys: list[str],
         pipeline_run_id: str | None = None,
+        source_run_refs: list[str] | None = None,
     ) -> None:
         if not source_ref_keys:
             return
@@ -1021,7 +1023,7 @@ class PostgresDemoAdapter(GraphDBInterface):
                 session,
                 edges,
                 lambda keys, run_refs: provenance_after_attach(
-                    keys, run_refs, keys_to_add, pipeline_run_id
+                    keys, run_refs, keys_to_add, pipeline_run_id, source_run_refs
                 ),
             )
             await session.commit()
@@ -1030,6 +1032,7 @@ class PostgresDemoAdapter(GraphDBInterface):
         self,
         node_ids: list[str],
         source_ref_keys: list[str],
+        pipeline_run_id: str | None = None,
     ) -> None:
         if not source_ref_keys:
             return
@@ -1039,7 +1042,9 @@ class PostgresDemoAdapter(GraphDBInterface):
             await self._update_node_provenance(
                 session,
                 node_ids,
-                lambda keys, run_refs: provenance_after_remove(keys, run_refs, keys_to_remove),
+                lambda keys, run_refs: provenance_after_remove(
+                    keys, run_refs, keys_to_remove, pipeline_run_id
+                ),
             )
             await session.commit()
 
@@ -1047,6 +1052,7 @@ class PostgresDemoAdapter(GraphDBInterface):
         self,
         edges: list[EdgeIdentity],
         source_ref_keys: list[str],
+        pipeline_run_id: str | None = None,
     ) -> None:
         if not source_ref_keys:
             return
@@ -1056,7 +1062,9 @@ class PostgresDemoAdapter(GraphDBInterface):
             await self._update_edge_provenance(
                 session,
                 edges,
-                lambda keys, run_refs: provenance_after_remove(keys, run_refs, keys_to_remove),
+                lambda keys, run_refs: provenance_after_remove(
+                    keys, run_refs, keys_to_remove, pipeline_run_id
+                ),
             )
             await session.commit()
 

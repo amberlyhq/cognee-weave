@@ -1372,6 +1372,7 @@ class LadybugAdapter(GraphDBInterface):
         node_ids: list[str],
         source_ref_keys: list[str],
         pipeline_run_id: str | None = None,
+        source_run_refs: list[str] | None = None,
     ) -> None:
         if not source_ref_keys:
             return
@@ -1382,7 +1383,7 @@ class LadybugAdapter(GraphDBInterface):
             self._write_node_provenance,
             self._node_row,
             lambda keys, run_refs: provenance_after_attach(
-                keys, run_refs, add_keys, pipeline_run_id
+                keys, run_refs, add_keys, pipeline_run_id, source_run_refs
             ),
         )
 
@@ -1391,6 +1392,7 @@ class LadybugAdapter(GraphDBInterface):
         edges: list[EdgeIdentity],
         source_ref_keys: list[str],
         pipeline_run_id: str | None = None,
+        source_run_refs: list[str] | None = None,
     ) -> None:
         if not source_ref_keys:
             return
@@ -1401,7 +1403,7 @@ class LadybugAdapter(GraphDBInterface):
             self._write_edge_provenance,
             self._edge_row,
             lambda keys, run_refs: provenance_after_attach(
-                keys, run_refs, add_keys, pipeline_run_id
+                keys, run_refs, add_keys, pipeline_run_id, source_run_refs
             ),
         )
 
@@ -1409,6 +1411,7 @@ class LadybugAdapter(GraphDBInterface):
         self,
         node_ids: list[str],
         source_ref_keys: list[str],
+        pipeline_run_id: str | None = None,
     ) -> None:
         if not source_ref_keys:
             return
@@ -1418,13 +1421,16 @@ class LadybugAdapter(GraphDBInterface):
             self._read_node_provenance,
             self._write_node_provenance,
             self._node_row,
-            lambda keys, run_refs: provenance_after_remove(keys, run_refs, remove_keys),
+            lambda keys, run_refs: provenance_after_remove(
+                keys, run_refs, remove_keys, pipeline_run_id
+            ),
         )
 
     async def remove_edge_source_refs(
         self,
         edges: list[EdgeIdentity],
         source_ref_keys: list[str],
+        pipeline_run_id: str | None = None,
     ) -> None:
         if not source_ref_keys:
             return
@@ -1434,7 +1440,9 @@ class LadybugAdapter(GraphDBInterface):
             self._read_edge_provenance,
             self._write_edge_provenance,
             self._edge_row,
-            lambda keys, run_refs: provenance_after_remove(keys, run_refs, remove_keys),
+            lambda keys, run_refs: provenance_after_remove(
+                keys, run_refs, remove_keys, pipeline_run_id
+            ),
         )
 
     async def delete_edge_triples(self, edges: list[EdgeIdentity]) -> None:
