@@ -141,3 +141,17 @@ async def test_service_sets_owned_scope_filters_sources_and_restores_caller(
         backend.dataset_lookup.assert_awaited_once_with(backend.owner)
     finally:
         native_organization.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_large_native_result_reaches_caller_intact(recall_backend):
+    from cognee.modules.weave.contracts import RecallRequest
+    from cognee.modules.weave.recall import recall
+
+    recall_backend.current.source_key = "review:" + "x" * 70000
+    response = await recall(
+        recall_backend.owner.organization_id,
+        RecallRequest(query="large", github_repository_ids=[10]),
+    )
+    assert response.status == "available"
+    assert json.loads(response.native_memory)[0]["text"] == recall_backend.current.source_key

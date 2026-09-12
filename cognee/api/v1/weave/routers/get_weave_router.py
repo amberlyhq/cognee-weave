@@ -251,7 +251,7 @@ def get_weave_router() -> APIRouter:
     )
     async def export_candidates(
         organization_id: UUID,
-        repository_id: list[int] = Query(default=[], max_length=20),
+        repository_id: list[int] = Query(default=[]),
     ) -> SurfaceResponse:
         from cognee.modules.weave.deletion import SurfaceNotFound, export_organization
 
@@ -266,7 +266,7 @@ def get_weave_router() -> APIRouter:
     )
     async def visualization(
         organization_id: UUID,
-        repository_id: list[int] = Query(default=[], max_length=20),
+        repository_id: list[int] = Query(default=[]),
     ) -> SurfaceResponse:
         from cognee.modules.weave.deletion import (
             SurfaceNotFound,

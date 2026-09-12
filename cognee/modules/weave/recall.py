@@ -99,7 +99,7 @@ async def _load_snapshots(
             else ()
         )
         records = await session.scalars(
-            query.order_by(*priority, WeaveRepositorySnapshot.github_repository_id).limit(20)
+            query.order_by(*priority, WeaveRepositorySnapshot.github_repository_id)
         )
         return list(records)
 
@@ -296,7 +296,7 @@ async def _vector_candidates(
             return await vector.search(
                 collection_name,
                 query_vector=query_vector,
-                limit=min(request.top_k * 2, 50),
+                limit=request.top_k * 2,
                 include_payload=True,
             )
         except CollectionNotFoundError:
@@ -367,8 +367,6 @@ async def _recall_scoped(
         graph = await get_graph_engine()
         graph_nodes, graph_edges = await graph.get_filtered_graph_data(
             [{"type": list(CODE_NODE_TYPES)}],
-            max_nodes=500,
-            max_edges=1000,
         )
         graph_candidates, vector_candidates = await asyncio.gather(
             _graph_candidates(request, snapshots, graph_nodes, graph_edges),

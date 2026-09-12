@@ -362,8 +362,6 @@ async def _recall_repository_memory(organization_id, request):
             ],
             ensure_ascii=False,
         )
-        if len(memory) > 64000:
-            raise ValueError("Native recall exceeds the response size boundary")
         references = [_repository_reference(record) for record in records]
         shas = {record.indexed_sha for record in records}
         return RecallResponse(

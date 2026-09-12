@@ -36,8 +36,6 @@ async def linked_review_context(binding, code_result, records, limit):
     ids = set()
 
     def collect(value, depth=0):
-        if depth > 12 or len(ids) >= 1000:
-            return
         if hasattr(value, "model_dump"):
             value = value.model_dump(mode="json")
         if isinstance(value, str) and value.startswith(("{", "[")):

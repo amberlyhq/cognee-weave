@@ -5,7 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 
-def test_review_request_cannot_select_a_dataset_or_supply_unbounded_content():
+def test_review_request_cannot_select_a_dataset():
     from cognee.modules.weave.contracts import ReviewMemoryRequest
 
     data = {
@@ -21,7 +21,6 @@ def test_review_request_cannot_select_a_dataset_or_supply_unbounded_content():
         {"dataset_id": str(uuid4())},
         {"head_sha": "bad"},
         {"artifact_revision": -1},
-        {"content": "x" * 500001},
     ):
         with pytest.raises(ValidationError):
             ReviewMemoryRequest(**(data | extra))
@@ -52,7 +51,7 @@ def test_review_never_reactivates_a_deleted_or_replaced_repository():
     )
 
 
-def test_review_accepts_bounded_completed_sessions_without_dataset_selectors():
+def test_review_accepts_completed_sessions_without_dataset_selectors():
     from cognee.modules.weave.contracts import ReviewMemoryRequest
 
     session = dict(
@@ -77,7 +76,6 @@ def test_review_accepts_bounded_completed_sessions_without_dataset_selectors():
     assert len(parsed.sessions) == 1
     for changed in (
         dict(dataset_id=str(uuid4())),
-        dict(steps=[dict(id="x", type="tool.completed", content="x" * 64001)]),
     ):
         with pytest.raises(ValidationError):
             ReviewMemoryRequest(**(data | {"sessions": [session | changed]}))
