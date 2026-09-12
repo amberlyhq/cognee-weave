@@ -263,7 +263,11 @@ async def detect_entity_duplicates(
         logger.info("consolidate_entities: fewer than 2 candidate entities; nothing to detect.")
         return {"clusters": [], "edges": edges}
 
-    vectors = await vector_engine.embed_data([member["name"] for member in members])
+    names = [member["name"] for member in members]
+    batch_size = vector_engine.embedding_engine.get_batch_size()
+    vectors = []
+    for start in range(0, len(names), batch_size):
+        vectors.extend(await vector_engine.embed_data(names[start : start + batch_size]))
     clusters = _cluster_entities(members, vectors, cfg)
 
     logger.info(
