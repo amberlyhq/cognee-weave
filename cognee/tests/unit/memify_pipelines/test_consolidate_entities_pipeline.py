@@ -57,6 +57,7 @@ def _graph_mock():
 
 def _vector_mock():
     vector = MagicMock()
+    vector.embedding_engine.get_batch_size.return_value = 36
     vector.embed_data = AsyncMock()
     vector.delete_data_points = AsyncMock()
     return vector
@@ -492,3 +493,36 @@ async def test_pipeline_wires_memify_tasks_and_config():
     assert detect_config["protect_node_types"] == ["City"]
     # detect and merge receive the same config object.
     assert merge_config == detect_config
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("batch_size", [36, 100])
+async def test_detect_batches_all_entity_names_in_order(batch_size):
+    names = [f"entity-{i}" for i in range(2053)]
+    nodes = [(str(i), {"name": name, "type": "Entity"}) for i, name in enumerate(names)]
+    graph = _graph_mock()
+    graph.get_graph_data.return_value = (nodes, [])
+    vector = _vector_mock()
+    vector.embedding_engine.get_batch_size.return_value = batch_size
+    requests = []
+
+    async def embed(batch):
+        assert len(batch) <= 2048, "Provider rejects more than 2048 inputs"
+        requests.append(batch)
+        return [[float(name.split("-")[1]), 1.0] for name in batch]
+
+    vector.embed_data.side_effect = embed
+    with (
+        patch(GRAPH, new=AsyncMock(return_value=graph)),
+        patch(VECTOR, return_value=vector),
+        patch("cognee.tasks.memify.consolidate_entities._cluster_entities") as cluster,
+    ):
+        await detect_entity_duplicates()
+
+    assert [name for batch in requests for name in batch] == names
+    assert [len(batch) for batch in requests] == [batch_size] * (len(names) // batch_size) + [
+        len(names) % batch_size
+    ]
+    members, vectors, _ = cluster.call_args.args
+    assert [member["name"] for member in members] == names
+    assert vectors == [[float(i), 1.0] for i in range(len(names))]

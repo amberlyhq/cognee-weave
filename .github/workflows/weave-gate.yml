@@ -40,6 +40,7 @@ jobs:
           cognee/tests/unit/infrastructure/databases/graph/test_postgres_adapter.py
           cognee/tests/unit/infrastructure/databases/vector
           cognee/tests/unit/modules/weave
+          cognee/tests/unit/memify_pipelines/test_consolidate_entities_pipeline.py
           cognee/tests/unit/modules/session_distillation
           cognee/tests/unit/tasks/code_graph
           cognee/tests/unit/modules/migrations
