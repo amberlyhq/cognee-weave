@@ -76,7 +76,30 @@ def test_openapi_request_models_do_not_expose_storage_selectors(monkeypatch):
     app = FastAPI()
     app.include_router(get_weave_router(), prefix="/api/v1/weave")
     schema = app.openapi()
-    rendered = str(schema).lower()
+    # Responses may report the server-resolved dataset as receipt evidence.
+    # Callers must never be able to choose it in request bodies or parameters.
+    seen = set()
+
+    def expand(value):
+        if isinstance(value, dict):
+            ref = value.get("$ref")
+            if ref and ref not in seen:
+                seen.add(ref)
+                return expand(schema["components"]["schemas"][ref.rsplit("/", 1)[1]])
+            return {key: expand(item) for key, item in value.items() if key != "$ref"}
+        if isinstance(value, list):
+            return [expand(item) for item in value]
+        return value
+
+    inputs = [
+        expand(operation.get(key, {}))
+        for path in schema["paths"].values()
+        for operation in path.values()
+        if isinstance(operation, dict)
+        for key in ("requestBody", "parameters")
+    ]
+    assert "MemoryCleanupRequest" in str(schema)
+    rendered = str(inputs).lower()
 
     for forbidden in (
         "tenant_id",
