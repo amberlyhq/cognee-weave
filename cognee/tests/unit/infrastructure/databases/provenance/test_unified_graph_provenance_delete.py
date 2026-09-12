@@ -169,29 +169,40 @@ class FakeProvenanceGraphEngine:
                 if run_ref not in artifact.source_run_refs:
                     artifact.source_run_refs.append(run_ref)
 
-    async def remove_node_source_refs(self, node_ids, source_ref_keys):
+    async def remove_node_source_refs(self, node_ids, source_ref_keys, pipeline_run_id=None):
         self._guard()
         removed = set(source_ref_keys)
         for node_id in node_ids:
             node = self.nodes.get(node_id)
             if node is None:
                 continue  # idempotent: already gone
-            node.source_ref_keys = [k for k in node.source_ref_keys if k not in removed]
-            node.source_run_refs = [
-                r for r in node.source_run_refs if _source_ref_of(r) not in removed
-            ]
+            from cognee.infrastructure.databases.provenance.source_ref_state import (
+                provenance_after_remove,
+            )
 
-    async def remove_edge_source_refs(self, edges, source_ref_keys):
+            state = provenance_after_remove(
+                node.source_ref_keys, node.source_run_refs, list(removed), pipeline_run_id
+            )
+            node.source_ref_keys, node.source_run_refs = (
+                state.source_ref_keys,
+                state.source_run_refs,
+            )
+
+    async def remove_edge_source_refs(self, edges, source_ref_keys, pipeline_run_id=None):
         self._guard()
         removed = set(source_ref_keys)
         for edge in edges:
             row = self.edges.get(edge)
             if row is None:
                 continue
-            row.source_ref_keys = [k for k in row.source_ref_keys if k not in removed]
-            row.source_run_refs = [
-                r for r in row.source_run_refs if _source_ref_of(r) not in removed
-            ]
+            from cognee.infrastructure.databases.provenance.source_ref_state import (
+                provenance_after_remove,
+            )
+
+            state = provenance_after_remove(
+                row.source_ref_keys, row.source_run_refs, list(removed), pipeline_run_id
+            )
+            row.source_ref_keys, row.source_run_refs = state.source_ref_keys, state.source_run_refs
 
     async def delete_nodes(self, node_ids):
         self._guard()
@@ -668,3 +679,64 @@ async def test_fake_dataset_helper_matches_contract():
 
 # Reference the imports used only inside helpers so linters keep them.
 _ = (EdgeType, generate_node_id, get_edge_retrieval_text)
+
+
+async def test_rollback_of_consolidated_alias_preserves_same_source_other_original_run():
+    dataset, data, run1, run2 = uuid4(), uuid4(), uuid4(), uuid4()
+    key = make_source_ref_key(dataset, data)
+    graph = FakeProvenanceGraphEngine()
+    node = graph.add_node("shared", "Entity", ["name"], {"name": "shared"})
+    graph.add_node("neighbor", "Entity", ["name"], {"name": "neighbor"})
+    identity = graph.add_edge("shared", "neighbor", "uses", "uses")
+    edge = graph.edges[identity]
+    for row in (node, edge):
+        row.source_ref_keys = [key]
+        row.source_run_refs = [make_source_run_ref(run1, key), make_source_run_ref(run2, key)]
+    await graph.attach_node_source_refs(["neighbor"], [make_source_ref_key(dataset, uuid4())])
+    vector = FakeVectorEngine()
+    engine = _build_engine(graph, vector)
+    await engine.rollback_by_pipeline_run_id(str(run2))
+    assert "shared" in graph.nodes and edge.edge in graph.edges
+    for row in (node, edge):
+        assert row.source_ref_keys == [key]
+        assert row.source_run_refs == [make_source_run_ref(run1, key)]
+    assert vector.deleted == []
+    await engine.rollback_by_pipeline_run_id(str(run2))
+    assert "shared" in graph.nodes
+    await engine.rollback_by_pipeline_run_id(str(run1))
+    assert "shared" not in graph.nodes and edge.edge not in graph.edges
+    assert "neighbor" in graph.nodes
+
+
+@pytest.mark.parametrize("untracked_is_existing", [True, False])
+async def test_consolidation_preserves_nonrollbackable_source_ownership_in_both_directions(
+    untracked_is_existing,
+):
+    from cognee.infrastructure.databases.provenance.source_ref_state import provenance_after_attach
+
+    dataset, data, other_data, run, other_run = uuid4(), uuid4(), uuid4(), uuid4(), uuid4()
+    key, other_key = make_source_ref_key(dataset, data), make_source_ref_key(dataset, other_data)
+    tracked = make_source_run_ref(run, key)
+    other_tracked = make_source_run_ref(other_run, other_key)
+    prior = [other_tracked] if untracked_is_existing else [tracked, other_tracked]
+    incoming = [tracked] if untracked_is_existing else []
+    merged = provenance_after_attach([key, other_key], prior, [key], None, incoming)
+    assert merged.source_run_refs == [other_tracked]
+    graph = FakeProvenanceGraphEngine()
+    node = graph.add_node("shared", "Entity", ["name"], {"name": "shared"})
+    graph.add_node("neighbor", "Entity", ["name"], {"name": "neighbor"})
+    edge_id = graph.add_edge("shared", "neighbor", "uses", "uses")
+    for row in (node, graph.edges[edge_id]):
+        row.source_ref_keys = list(merged.source_ref_keys)
+        row.source_run_refs = list(merged.source_run_refs)
+    vector = FakeVectorEngine()
+    engine = _build_engine(graph, vector)
+    await engine.rollback_by_pipeline_run_id(str(run))
+    assert node.source_ref_keys == [key, other_key]
+    await engine.rollback_by_pipeline_run_id(str(other_run))
+    for row in (node, graph.edges[edge_id]):
+        assert row.source_ref_keys == [key]
+        assert row.source_run_refs == []
+    assert vector.deleted == []
+    await engine.delete_by_source_ref(key)
+    assert "shared" not in graph.nodes and edge_id not in graph.edges

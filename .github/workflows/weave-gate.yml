@@ -56,13 +56,13 @@ jobs:
       postgres:
         image: pgvector/pgvector:0.8.6-pg17-bookworm
         env:
-          POSTGRES_USER: cognee
+          POSTGRES_USER: postgres
           POSTGRES_PASSWORD: cognee
           POSTGRES_DB: cognee_db
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U cognee -d cognee_db"
+          --health-cmd "pg_isready -U postgres -d cognee_db"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -74,21 +74,21 @@ jobs:
       DB_PROVIDER: postgres
       DB_HOST: 127.0.0.1
       DB_PORT: "5432"
-      DB_USERNAME: cognee
+      DB_USERNAME: postgres
       DB_PASSWORD: cognee
       DB_NAME: cognee_db
       VECTOR_DB_PROVIDER: pgvector
       VECTOR_DATASET_DATABASE_HANDLER: pgvector_shared
       VECTOR_DB_HOST: 127.0.0.1
       VECTOR_DB_PORT: "5432"
-      VECTOR_DB_USERNAME: cognee
+      VECTOR_DB_USERNAME: postgres
       VECTOR_DB_PASSWORD: cognee
       VECTOR_DB_NAME: cognee_db
       GRAPH_DATABASE_PROVIDER: postgres_demo
       GRAPH_DATASET_DATABASE_HANDLER: postgres_graph_shared
       GRAPH_DATABASE_HOST: 127.0.0.1
       GRAPH_DATABASE_PORT: "5432"
-      GRAPH_DATABASE_USERNAME: cognee
+      GRAPH_DATABASE_USERNAME: postgres
       GRAPH_DATABASE_PASSWORD: cognee
       GRAPH_DATABASE_NAME: cognee_db
       COGNEE_SKIP_CONNECTION_TEST: "true"
@@ -115,8 +115,6 @@ jobs:
           cognee/tests/e2e/postgres/test_weave_lock_wait.py
           cognee/tests/e2e/postgres/test_weave_native_storage.py
           cognee/tests/e2e/postgres/test_weave_gradual_review_memory.py
-          cognee/tests/e2e/postgres/test_weave_qualified_review_memory.py
-          cognee/tests/e2e/postgres/test_weave_merge_memory.py
           cognee/tests/e2e/postgres/test_weave_scoped_source_ingestion.py
           cognee/tests/e2e/postgres/test_weave_dataset_migration.py
           cognee/tests/e2e/postgres/test_pgvector_hnsw_plan.py
@@ -124,6 +122,33 @@ jobs:
           cognee/tests/e2e/postgres/test_weave_exact_sha_indexing.py
           cognee/tests/e2e/postgres/test_weave_hybrid_recall.py
           cognee/tests/e2e/postgres/test_weave_surface_isolation.py
+          --timeout=300 --timeout-method=thread -v
+
+      - name: Prepare restricted native memory runtime
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "5432"
+          PGPASSWORD: cognee
+          POSTGRES_USER: postgres
+          POSTGRES_DB: cognee_db
+          POSTGRES_PASSWORD: cognee
+          WEAVE_DB_PASSWORD: cognee-runtime
+        run: |
+          bash deployment/init-weave-postgres.sh
+          uv run python -c 'import asyncio; from cognee.modules.weave.rls import ensure_weave_rls_policies; asyncio.run(ensure_weave_rls_policies())'
+      - name: Native memory and cleanup with enforced tenant RLS
+        env:
+          WEAVE_STRICT_MODE: "true"
+          DB_USERNAME: cognee
+          DB_PASSWORD: cognee-runtime
+          VECTOR_DB_USERNAME: cognee
+          VECTOR_DB_PASSWORD: cognee-runtime
+          GRAPH_DATABASE_USERNAME: cognee
+          GRAPH_DATABASE_PASSWORD: cognee-runtime
+        run: >-
+          uv run pytest
+          cognee/tests/e2e/postgres/test_weave_agent_memory.py
+          cognee/tests/e2e/postgres/test_weave_memory_cleanup.py
           --timeout=300 --timeout-method=thread -v
 
   parity-and-security:

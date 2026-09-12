@@ -11,7 +11,7 @@ pytestmark = pytest.mark.skipif(os.getenv("DB_PROVIDER") != "postgres", reason="
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["remember", "update", "retry"])
+@pytest.mark.parametrize("operation", ["remember", "update"])
 async def test_qualified_source_ignores_disposed_code_archive_and_pending_old_corpus(
     tmp_path, monkeypatch, operation
 ):
@@ -24,7 +24,7 @@ async def test_qualified_source_ignores_disposed_code_archive_and_pending_old_co
     from cognee.modules.users.methods import get_user
     from cognee.modules.weave.archive import validated_archive
     from cognee.modules.weave.config import get_weave_embedding_config, get_weave_llm_config
-    from cognee.modules.weave.contracts import ReviewMemoryRequest
+    from cognee.modules.weave.agent_memory_contracts import MemoryApplyRequest
     from cognee.modules.weave.deletion import delete_organization
     from cognee.modules.weave.indexing import index_repository_archive
     from cognee.modules.weave.memory_sources import source_records
@@ -33,7 +33,7 @@ async def test_qualified_source_ignores_disposed_code_archive_and_pending_old_co
         provision_organization,
         set_weave_organization_scope,
     )
-    from cognee.modules.weave.review_memory import remember_review
+    from cognee.modules.weave.agent_memory import apply_memory_notes
     from cognee.tasks.ingestion.data_item import DataItem
     from cognee.tests.e2e.postgres.test_weave_hybrid_recall import _archive, _request
 
@@ -48,19 +48,6 @@ async def test_qualified_source_ignores_disposed_code_archive_and_pending_old_co
         schema = kwargs.get("response_model") or args[2]
         text = kwargs.get("text_input", "")
         calls.append((schema.__name__, text))
-        if schema.__name__ == "KnowledgeSelection":
-            return schema(
-                facts=[
-                    dict(
-                        statement=statement,
-                        code_path="main.go",
-                        certainty="reported",
-                        evidence_ids=["E1"],
-                    )
-                ]
-            )
-        if schema.__name__ == "KnowledgeAudit":
-            return schema(issues=[])
         if schema.__name__ == "KnowledgeGraph":
             return schema(
                 nodes=[dict(id="Message", name="Message", type="function", description=statement)],
@@ -77,24 +64,51 @@ async def test_qualified_source_ignores_disposed_code_archive_and_pending_old_co
             )
 
     monkeypatch.setattr(LLMGateway, "acreate_structured_output", model)
-    request = ReviewMemoryRequest(
-        github_repository_id=repo,
-        review_id=uuid4(),
-        head_sha="a" * 40,
+    note_id = uuid4()
+    request = MemoryApplyRequest(
+        job_id=uuid4(),
         lifecycle_generation=1,
-        artifact_revision=1,
-        content=statement,
+        source_kind="review",
+        source_id="scoped-source-test",
+        source_sha="a" * 40,
+        operations=[
+            dict(
+                operation_id=uuid4(),
+                note_id=note_id,
+                action="add",
+                expected_version=0,
+                content=statement,
+                source_paths=["main.go"],
+                reason="Agent result",
+            )
+        ],
     )
     llm, embedding = get_weave_llm_config(), get_weave_embedding_config()
     try:
         await index_repository_archive(
             _request(binding.organization_id, repo, "scoped-memory", "a" * 40), archive
         )
-        if operation in {"update", "retry"}:
-            assert (await remember_review(binding.organization_id, request)).status == "remember"
+        if operation == "update":
+            assert (
+                await apply_memory_notes(binding.organization_id, repo, request)
+            ).status == "completed"
         if operation == "update":
             statement = "FRESH_REVIEW: Message in main.go still returns the payment message."
-            request = request.model_copy(update={"artifact_revision": 2, "content": statement})
+            request = request.model_copy(
+                update={
+                    "job_id": uuid4(),
+                    "operations": [
+                        request.operations[0].model_copy(
+                            update={
+                                "operation_id": uuid4(),
+                                "action": "update",
+                                "expected_version": 1,
+                                "content": statement,
+                            }
+                        )
+                    ],
+                }
+            )
         async with scoped_database_context_variables(
             binding.dataset_id, user.id, llm_config=llm, embedding_config=embedding
         ):
@@ -124,22 +138,9 @@ async def test_qualified_source_ignores_disposed_code_archive_and_pending_old_co
         ]
         assert len(legacy) == 4
         prior_states = {r.id: deepcopy(r.pipeline_status) for r in legacy}
-        if operation == "retry":
-            async with get_relational_engine().get_async_session() as session:
-                await set_weave_organization_scope(session, binding.organization_id)
-                record = await session.get(
-                    WeaveMemorySource,
-                    (binding.organization_id, repo, f"review:qualified:{request.review_id}"),
-                )
-                # Staging failed after creating Data but before the native
-                # memory completion receipt. Redelivery must take update().
-                record.status = "processing_remember"
-                await session.commit()
         calls.clear()
-        result = await remember_review(binding.organization_id, request)
-        assert result.status == ("remember" if operation == "remember" else "update")
-        if operation == "retry":
-            assert all(name != "KnowledgeSelection" for name, _ in calls)
+        result = await apply_memory_notes(binding.organization_id, repo, request)
+        assert result.status == "completed"
         assert all("OLD_CORPUS_SENTINEL" not in text for _, text in calls)
         assert sum(name == "KnowledgeGraph" for name, _ in calls) == 1
         assert sum(name == "SummarizedContent" for name, _ in calls) == 1
@@ -148,7 +149,7 @@ async def test_qualified_source_ignores_disposed_code_archive_and_pending_old_co
         current = next(
             r
             for r in await source_records(binding, repo)
-            if r.source_key == f"review:qualified:{request.review_id}"
+            if r.source_key == f"review:note:{note_id}"
         )
         assert current.status == "completed"
         assert current.data_id in after

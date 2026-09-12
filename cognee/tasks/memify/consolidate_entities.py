@@ -532,14 +532,23 @@ async def merge_entity_duplicates(
     if updated_canonicals:
         await graph_engine.add_nodes(updated_canonicals)
 
+    # Source deletion uses native ownership records, not belongs_to_set tags.
+    # Move those records before detach-delete discards the original graph IDs.
+    from cognee.modules.graph.methods.transfer_consolidated_ownership import (
+        transfer_consolidated_ownership,
+    )
+
+    await transfer_consolidated_ownership(graph_engine, remap, edges)
+
     # 3. Delete the duplicates (detach-delete cascades their old edges) and
     #    purge their name embeddings, or stale vectors resurface in later runs.
     if duplicate_ids:
-        await graph_engine.delete_nodes(duplicate_ids)
         # Duplicate ids are already strings. Sibling deletion code (e.g.
         # delete_from_graph_and_vector) likewise passes string ids, which keeps
         # this adapter-agnostic and avoids a UUID() cast that could raise.
         await vector_engine.delete_data_points(ENTITY_VECTOR_COLLECTION, duplicate_ids)
+        # Keep original graph IDs discoverable until vector deletion succeeds.
+        await graph_engine.delete_nodes(duplicate_ids)
 
     logger.info(
         "consolidate_entities: merged %d duplicate(s) into %d canonical(s).",

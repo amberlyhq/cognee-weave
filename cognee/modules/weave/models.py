@@ -162,3 +162,77 @@ class WeaveIndexJob(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=_now)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
     completed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class WeaveMemoryNote(Base):
+    """Stable native document identity and the last accepted host result."""
+
+    __tablename__ = "weave_memory_notes"
+    organization_id = Column(
+        UUID,
+        ForeignKey("weave_organization_bindings.organization_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    github_repository_id = Column(BigInteger, primary_key=True)
+    note_id = Column(UUID, primary_key=True)
+    version = Column(BigInteger, nullable=False)
+    status = Column(String(32), nullable=False)
+    content = Column(String, nullable=False)
+    source_sha = Column(String(40), nullable=False)
+    source_paths = Column(JSON, nullable=False)
+    provenance = Column(JSON, nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)
+
+
+class WeaveMemoryJob(Base):
+    """Immutable accepted result; native retries never re-run the agent."""
+
+    __tablename__ = "weave_memory_jobs"
+    organization_id = Column(
+        UUID,
+        ForeignKey("weave_organization_bindings.organization_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    job_id = Column(UUID, primary_key=True)
+    github_repository_id = Column(BigInteger, nullable=False)
+    payload = Column(JSON, nullable=False)
+    payload_hash = Column(String(64), nullable=False)
+    status = Column(String(32), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_now)
+
+
+class WeaveMemoryOperation(Base):
+    """Per-operation progress and historical result retained after native update."""
+
+    __tablename__ = "weave_memory_operations"
+    organization_id = Column(
+        UUID,
+        ForeignKey("weave_organization_bindings.organization_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    operation_id = Column(UUID, primary_key=True)
+    job_id = Column(UUID, nullable=False)
+    github_repository_id = Column(BigInteger, nullable=False)
+    note_id = Column(UUID, nullable=False)
+    version = Column(BigInteger, nullable=False)
+    status = Column(String(32), nullable=False)
+    receipt = Column(JSON, nullable=True)
+
+
+class WeaveMemoryCleanup(Base):
+    """Native cleanup progress, separate from accepted note operations."""
+
+    __tablename__ = "weave_memory_cleanups"
+    organization_id = Column(
+        UUID,
+        ForeignKey("weave_organization_bindings.organization_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    job_id = Column(UUID, primary_key=True)
+    mode = Column(String(16), primary_key=True)
+    github_repository_id = Column(BigInteger, nullable=False)
+    lifecycle_generation = Column(BigInteger, nullable=False)
+    status = Column(String(32), nullable=False)
+    receipt = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=_now, onupdate=_now)

@@ -158,6 +158,7 @@ class GraphDBInterface(ABC):
         node_ids: list[str],
         source_ref_keys: list[str],
         pipeline_run_id: str | None = None,
+        source_run_refs: list[str] | None = None,
     ) -> None:
         """
         Attach source refs to existing graph nodes.
@@ -172,6 +173,9 @@ class GraphDBInterface(ABC):
             - node_ids (list[str]): Unique identifiers of the nodes to update.
             - source_ref_keys (list[str]): Source refs to append to each node.
             - pipeline_run_id (str | None): Pipeline run that attached the refs.
+            - source_run_refs (list[str] | None): Historical run/source pairs
+              to preserve when transferring existing ownership; each pair must
+              belong to a supplied source_ref_key. Ordinary attaches omit this.
 
         Default implementation raises UnsupportedProvenanceCapability.
         """
@@ -182,6 +186,7 @@ class GraphDBInterface(ABC):
         edges: list[EdgeIdentity],
         source_ref_keys: list[str],
         pipeline_run_id: str | None = None,
+        source_run_refs: list[str] | None = None,
     ) -> None:
         """
         Attach source refs to existing graph edges.
@@ -196,6 +201,9 @@ class GraphDBInterface(ABC):
             - edges (list[EdgeIdentity]): Edge identities to update.
             - source_ref_keys (list[str]): Source refs to append to each edge.
             - pipeline_run_id (str | None): Pipeline run that attached the refs.
+            - source_run_refs (list[str] | None): Historical run/source pairs
+              to preserve when transferring existing ownership; each pair must
+              belong to a supplied source_ref_key. Ordinary attaches omit this.
 
         Default implementation raises UnsupportedProvenanceCapability.
         """
@@ -205,9 +213,13 @@ class GraphDBInterface(ABC):
         self,
         node_ids: list[str],
         source_ref_keys: list[str],
+        pipeline_run_id: str | None = None,
     ) -> None:
         """
         Remove source refs from graph nodes.
+
+        When pipeline_run_id is supplied, remove only that run’s ownership;
+        retain source keys still owned by other runs. Omit it to forget the source.
 
         Implementations also keep source_dataset_ids, source_run_ids, and
         source_run_refs consistent with the remaining source_ref_keys.
@@ -226,9 +238,13 @@ class GraphDBInterface(ABC):
         self,
         edges: list[EdgeIdentity],
         source_ref_keys: list[str],
+        pipeline_run_id: str | None = None,
     ) -> None:
         """
         Remove source refs from graph edges.
+
+        When pipeline_run_id is supplied, remove only that run’s ownership;
+        retain source keys still owned by other runs. Omit it to forget the source.
 
         Implementations also keep source_dataset_ids, source_run_ids, and
         source_run_refs consistent with the remaining source_ref_keys.

@@ -30,6 +30,7 @@ from cognee.infrastructure.databases.provenance import (
     EdgeIdentity,
     NodeDeleteData,
 )
+from cognee.infrastructure.databases.provenance.source_ref_state import provenance_after_remove
 from cognee.modules.engine.utils import generate_node_id
 from cognee.modules.graph.models.EdgeType import EdgeType
 from cognee.modules.graph.utils.prepare_edges_for_storage import get_edge_retrieval_text
@@ -75,6 +76,7 @@ async def execute_source_ref_removal(
     edge_data: dict[EdgeIdentity, EdgeDeleteData],
     refs_by_node: dict[str, list[str]],
     refs_by_edge: dict[EdgeIdentity, list[str]],
+    pipeline_run_id: str | None = None,
 ) -> SourceRefRemovalResult:
     """Remove the given source refs and hard-delete artifacts that become unowned."""
     # ------------------------------------------------------------------
@@ -83,13 +85,17 @@ async def execute_source_ref_removal(
     unowned_node_ids: list[str] = []
     for node_id, data in node_data.items():
         removed = refs_by_node.get(node_id, [])
-        if _is_unowned(data.source_ref_keys, removed):
+        if not provenance_after_remove(
+            data.source_ref_keys, data.source_run_refs, removed, pipeline_run_id
+        ).source_ref_keys:
             unowned_node_ids.append(node_id)
 
     unowned_edges: list[EdgeIdentity] = []
     for edge, data in edge_data.items():
         removed = refs_by_edge.get(edge, [])
-        if _is_unowned(data.source_ref_keys, removed):
+        if not provenance_after_remove(
+            data.source_ref_keys, data.source_run_refs, removed, pipeline_run_id
+        ).source_ref_keys:
             unowned_edges.append(edge)
 
     # ------------------------------------------------------------------
@@ -135,7 +141,8 @@ async def execute_source_ref_removal(
         nodes_by_removed_refs.setdefault(tuple(removed), []).append(node_id)
 
     for removed_refs, node_ids in nodes_by_removed_refs.items():
-        await graph_engine.remove_node_source_refs(node_ids, list(removed_refs))
+        kwargs = {"pipeline_run_id": pipeline_run_id} if pipeline_run_id is not None else {}
+        await graph_engine.remove_node_source_refs(node_ids, list(removed_refs), **kwargs)
 
     unowned_edge_set = set(unowned_edges)
     edges_by_removed_refs: dict[tuple[str, ...], list[EdgeIdentity]] = {}
@@ -148,7 +155,8 @@ async def execute_source_ref_removal(
         edges_by_removed_refs.setdefault(tuple(removed), []).append(edge)
 
     for removed_refs, edges in edges_by_removed_refs.items():
-        await graph_engine.remove_edge_source_refs(edges, list(removed_refs))
+        kwargs = {"pipeline_run_id": pipeline_run_id} if pipeline_run_id is not None else {}
+        await graph_engine.remove_edge_source_refs(edges, list(removed_refs), **kwargs)
 
     # ------------------------------------------------------------------
     # 4. Hard-delete unowned artifacts.

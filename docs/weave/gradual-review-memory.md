@@ -1,3 +1,5 @@
+> Historical design. The current implementation is [agent memory storage](agent-memory-storage.md): governance owns the agents and Weave only applies their selected native-memory operations.
+
 # Code graph first, review memory later
 
 Repository imports use native Cognee code extraction with vector indexing and

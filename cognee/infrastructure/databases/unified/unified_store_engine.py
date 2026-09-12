@@ -153,4 +153,5 @@ class UnifiedStoreEngine(GraphVectorStoreInterface):
             edge_data=edge_data,
             refs_by_node=refs_by_node,
             refs_by_edge=refs_by_edge,
+            pipeline_run_id=pipeline_run_id,
         )
